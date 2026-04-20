@@ -1,0 +1,29 @@
+.env
+*.kate-swp
+*.swp
+*.swo
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.log
+*.db
+*.sqlite3
+# Playwright
+playwright/.auth/
+# Sentence transformers cache
+~/.cache/huggingface/
+# Supabase local
+.supabase/
+supabase/.temp/
