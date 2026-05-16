@@ -1,14 +1,11 @@
-from .router import router_node
-from .scraper_node import scraper_node
-from .vision_node import vision_node
-from .store_node import store_node
-from .query_node import query_node
-from .comparison_node import comparison_node
-from .alert_node import alert_node
-from .response_node import response_node
+"""Agent node package.
+
+Keep package import side effects minimal so individual nodes can be imported
+in tests without initializing the entire workflow graph.
+"""
 
 __all__ = [
-    "router_node",
+    "router",
     "scraper_node",
     "vision_node",
     "store_node",
