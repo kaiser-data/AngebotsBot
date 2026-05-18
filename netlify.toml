@@ -1,0 +1,16 @@
+# Netlify config for the Next.js dashboard.
+# The dashboard lives in dashboard/ (the repo root holds the Python bot).
+# Netlify will run the build inside that subdirectory and use @netlify/plugin-nextjs
+# (auto-installed by Netlify when it detects Next.js) to host SSR + edge middleware.
+
+[build]
+  base    = "dashboard"
+  command = "npm ci && npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Sensible defaults — Netlify will detect Next.js and install the plugin.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

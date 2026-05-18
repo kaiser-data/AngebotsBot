@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens — single source of truth for the whole app. */
+:root {
+  --bg: 250 250 250;             /* page background */
+  --surface: 255 255 255;        /* cards, list rows */
+  --surface-hover: 244 244 245;  /* row hover */
+  --border: 228 228 231;         /* dividers, card borders */
+  --border-strong: 212 212 216;
+  --fg: 24 24 27;                /* primary text */
+  --fg-muted: 82 82 91;          /* secondary text */
+  --fg-subtle: 161 161 170;      /* tertiary, hint text */
+  --accent: 14 165 233;          /* sky-500, primary chart line */
+  --accent-fg: 14 116 144;
+  --positive: 5 150 105;         /* emerald-600 */
+  --negative: 225 29 72;         /* rose-600 */
+  --warning: 217 119 6;          /* amber-600 */
+
+  color-scheme: light;
+}
+
+html.dark {
+  --bg: 9 9 11;                  /* zinc-950 */
+  --surface: 24 24 27;           /* zinc-900 */
+  --surface-hover: 39 39 42;     /* zinc-800 */
+  --border: 39 39 42;            /* zinc-800 */
+  --border-strong: 63 63 70;     /* zinc-700 */
+  --fg: 244 244 245;             /* zinc-100 */
+  --fg-muted: 161 161 170;       /* zinc-400 */
+  --fg-subtle: 113 113 122;      /* zinc-500 */
+  --accent: 56 189 248;          /* sky-400 */
+  --accent-fg: 125 211 252;
+  --positive: 52 211 153;
+  --negative: 251 113 133;
+  --warning: 251 191 36;
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: rgb(var(--bg));
+  --color-surface: rgb(var(--surface));
+  --color-surface-hover: rgb(var(--surface-hover));
+  --color-border: rgb(var(--border));
+  --color-border-strong: rgb(var(--border-strong));
+  --color-fg: rgb(var(--fg));
+  --color-fg-muted: rgb(var(--fg-muted));
+  --color-fg-subtle: rgb(var(--fg-subtle));
+  --color-accent: rgb(var(--accent));
+  --color-positive: rgb(var(--positive));
+  --color-negative: rgb(var(--negative));
+  --color-warning: rgb(var(--warning));
+}
+
+html {
+  background-color: rgb(var(--bg));
+  color: rgb(var(--fg));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Subtle, consistent focus ring for keyboard users. */
+*:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
