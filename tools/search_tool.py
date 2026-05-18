@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from providers.embeddings import embed_text
 from providers.supabase_client import get_supabase
+from scraper.utils import berlin_today
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,121 @@ def semantic_search(
         return result.data or []
     except Exception as exc:
         logger.error("search_offers RPC failed: %s", exc)
+        return []
+
+
+def latest_offers(limit: int = 10, only_current: bool = False) -> list[dict]:
+    """Return latest active offers with optional 'currently valid' filtering."""
+    try:
+        query = (
+            get_supabase()
+            .table("offers")
+            .select(
+                "id,title,price,original_price,discount_percent,store,category,url,image_url,"
+                "validity_text,valid_from,valid_to,is_upcoming,scraped_at,"
+                "offer_analyses(deal_verdict,quality_score,tags,key_features)"
+            )
+            .eq("is_active", True)
+        )
+
+        if only_current:
+            today = berlin_today().isoformat()
+            query = query.or_(
+                f"valid_from.is.null,and(valid_from.lte.{today},valid_to.is.null),"
+                f"and(valid_from.lte.{today},valid_to.gte.{today}),"
+                f"and(valid_from.is.null,valid_to.gte.{today})"
+            )
+
+        result = (
+            query
+            .order("is_upcoming", desc=False)
+            .order("valid_from", desc=False, nullsfirst=False)
+            .order("discount_percent", desc=True, nullslast=True)
+            .order("scraped_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = result.data or []
+        normalized: list[dict] = []
+        for row in rows:
+            analysis_rows = row.pop("offer_analyses", None) or []
+            analysis = analysis_rows[0] if analysis_rows else {}
+            normalized.append({**row, **analysis})
+        return normalized
+    except Exception as exc:
+        logger.error("latest_offers query failed: %s", exc)
+        return []
+
+
+def search_brochure_pages(
+    query: str,
+    limit: int = 8,
+    stores: Optional[list[str]] = None,
+) -> list[dict]:
+    """Search persisted brochure pages with simple text matching."""
+    try:
+        sb_query = get_supabase().table("brochure_pages").select(
+            "id,external_id,store,category,title,brochure_title,viewer_url,image_url,"
+            "page_number,validity_text,valid_from,valid_to,is_upcoming,scraped_at"
+        )
+
+        lowered = query.lower()
+        terms = [term for term in lowered.replace(",", " ").split() if len(term) >= 3]
+        text_terms = [term for term in terms if term not in {"prospekt", "katalog", "kataloge", "seite"}]
+
+        if stores:
+            store_clauses = ",".join(f"store.ilike.%{store}%" for store in stores)
+            sb_query = sb_query.or_(store_clauses)
+
+        if text_terms:
+            clauses: list[str] = []
+            for term in text_terms:
+                clauses.extend(
+                    [
+                        f"title.ilike.%{term}%",
+                        f"brochure_title.ilike.%{term}%",
+                        f"store.ilike.%{term}%",
+                    ]
+                )
+            text_clauses = ",".join(clauses)
+            sb_query = sb_query.or_(text_clauses)
+
+        result = (
+            sb_query
+            .order("scraped_at", desc=True)
+            .order("page_number", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        rows = result.data or []
+        return [{**row, "result_type": "brochure_page", "url": row.get("viewer_url")} for row in rows]
+    except Exception as exc:
+        logger.error("search_brochure_pages failed: %s", exc)
+        return []
+
+
+def latest_brochure_pages(limit: int = 8, stores: Optional[list[str]] = None) -> list[dict]:
+    """Return latest persisted brochure pages, optionally filtered by store."""
+    try:
+        query = get_supabase().table("brochure_pages").select(
+            "id,external_id,store,category,title,brochure_title,viewer_url,image_url,"
+            "page_number,validity_text,valid_from,valid_to,is_upcoming,scraped_at"
+        )
+
+        if stores:
+            query = query.or_(",".join(f"store.ilike.%{store}%" for store in stores))
+
+        result = (
+            query
+            .order("scraped_at", desc=True)
+            .order("page_number", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        rows = result.data or []
+        return [{**row, "result_type": "brochure_page", "url": row.get("viewer_url")} for row in rows]
+    except Exception as exc:
+        logger.error("latest_brochure_pages failed: %s", exc)
         return []
 
 

@@ -1,4 +1,4 @@
-"""Vision node — analyzes offer images with Qwen2.5-VL-32B-Instruct via Featherless."""
+"""Vision node — analyzes offer images with Gemini via OpenAI-compatible API."""
 
 import asyncio
 import json
@@ -65,7 +65,7 @@ async def _analyze_single(
                             ],
                         },
                     ],
-                    max_tokens=512,
+                    max_tokens=4096,
                     temperature=0.1,
                 )
                 raw = response.choices[0].message.content or ""

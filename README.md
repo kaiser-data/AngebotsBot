@@ -5,7 +5,7 @@ AI-powered deal scanner for kaufda.de — scrapes offers weekly, analyses produc
 ## Features
 
 - **Weekly auto-scrape** — APScheduler runs every Monday 08:00 (Europe/Berlin); trigger on-demand via chat
-- **Vision AI analysis** — Qwen2.5-VL-32B-Instruct (via Featherless API) analyses each product image and extracts brand, condition, key features, quality score, and deal verdict
+- **Vision AI analysis** — Gemini 2.5 Flash (via Google AI API) analyses each product image and extracts brand, condition, key features, quality score, and deal verdict
 - **Semantic search** — pgvector + gte-small embeddings (Supabase Edge Function) for natural-language offer queries
 - **Comparison** — side-by-side Markdown table with LLM verdict
 - **Alerts** — save search criteria; Supabase Edge Function sends weekly digests via Telegram or email (Resend)
@@ -17,7 +17,7 @@ AI-powered deal scanner for kaufda.de — scrapes offers weekly, analyses produc
 | Layer | Technology |
 |---|---|
 | Agent orchestration | LangGraph `StateGraph` + LangChain |
-| Vision + text LLM | Qwen2.5-VL-32B-Instruct via [Featherless](https://featherless.ai) |
+| Vision + text LLM | Gemini 2.5 Flash via [Google AI](https://ai.google.dev) |
 | Embeddings | Supabase Edge Function — `gte-small` (384-dim, no GPU) |
 | Database | Supabase (PostgreSQL + pgvector) |
 | Web UI | Chainlit 1.3.2 |
@@ -51,8 +51,8 @@ AngebotsBot/
 │   └── response_node.py      # final answer formatting
 │
 ├── providers/                # shared clients (singletons)
-│   ├── llm.py                # Featherless text model
-│   ├── vision.py             # Featherless Qwen VL
+│   ├── llm.py                # Gemini text model
+│   ├── vision.py             # Gemini vision
 │   ├── embeddings.py         # Supabase generate-embedding Edge Function
 │   └── supabase_client.py    # Supabase singleton
 │
@@ -109,7 +109,7 @@ playwright install chromium
 
 ```bash
 cp .env.example .env
-# fill in: FEATHERLESS_API_KEY, SUPABASE_URL (.supabase.co), SUPABASE_ANON_KEY,
+# fill in: GEMINI_API_KEY, SUPABASE_URL (.supabase.co), SUPABASE_ANON_KEY,
 #          SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN, RESEND_API_KEY
 ```
 
@@ -167,9 +167,9 @@ START → router_node
 
 | Variable | Description |
 |---|---|
-| `FEATHERLESS_API_KEY` | Featherless API key |
-| `FEATHERLESS_BASE_URL` | `https://api.featherless.ai/v1` |
-| `VISION_MODEL` | `Qwen/Qwen2.5-VL-32B-Instruct` |
+| `GEMINI_API_KEY` | Google AI API key |
+| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| `VISION_MODEL` | `gemini-2.5-flash` |
 | `TEXT_MODEL` | Optional cheaper text model |
 | `SUPABASE_URL` | `https://xxx.supabase.co` (always `.co`) |
 | `SUPABASE_ANON_KEY` | Supabase anon JWT |

@@ -13,15 +13,27 @@ class OfferData(TypedDict):
     url: str
     image_url: Optional[str]
     price: Optional[float]
+    standard_price: Optional[float]
+    loyalty_price: Optional[float]
     original_price: Optional[float]
     discount_percent: Optional[float]
     store: Optional[str]
     category: Optional[str]
+    source_viewer_url: Optional[str]
+    source_page_number: Optional[int]
+    source_page_image_url: Optional[str]
+    requires_loyalty: bool
+    loyalty_program: Optional[str]
+    price_condition_text: Optional[str]
+    validity_text: Optional[str]
+    valid_from: Optional[str]
+    valid_to: Optional[str]
+    is_upcoming: bool
     scraped_at: str           # ISO timestamp
 
 
 class AnalyzedOffer(TypedDict):
-    """Structured output from Qwen VL vision analysis."""
+    """Structured output from Gemini vision analysis."""
     external_id: str          # matches OfferData.external_id
     product_name: str
     brand: str

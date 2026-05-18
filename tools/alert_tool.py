@@ -79,8 +79,8 @@ def get_or_create_user(telegram_chat_id: Optional[str] = None, email: Optional[s
     """Return existing user or create a new one. At least one contact required."""
     if not telegram_chat_id and not email:
         return None
-    sb = get_supabase()
     try:
+        sb = get_supabase()
         # Try to find existing user
         if telegram_chat_id:
             res = sb.table("users").select("*").eq("telegram_chat_id", telegram_chat_id).execute()

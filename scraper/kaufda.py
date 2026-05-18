@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from datetime import datetime
+import re
+from datetime import UTC, datetime
 from typing import Optional
 from urllib.request import urlopen
 
@@ -11,12 +12,28 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 import config
 from scraper.models import RawOffer
-from scraper.utils import fingerprint_url, canonical_url, clean_price, clean_discount, jitter_sleep
+from scraper.utils import (
+    fingerprint_url,
+    canonical_url,
+    clean_price,
+    clean_discount,
+    extract_loyalty_condition,
+    jitter_sleep,
+    parse_offer_validity,
+    resolve_offer_prices,
+)
 from providers.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.kaufda.de"
+RETAILER_PAGES = {
+    "lidl": f"{BASE_URL}/Geschaefte/Lidl",
+    "edeka": f"{BASE_URL}/Geschaefte/Edeka",
+    "aldi": f"{BASE_URL}/Geschaefte/Aldi-Nord",
+    "aldi-nord": f"{BASE_URL}/Geschaefte/Aldi-Nord",
+    "aldi-sued": f"{BASE_URL}/Geschaefte/Aldi-Sued",
+}
 
 # Categories to scrape — update slugs if kaufda changes their navigation
 CATEGORIES = [
@@ -95,6 +112,164 @@ class KaufdaScraper:
         logger.info("Found %d new offers (total scraped: %d)", len(new_offers), len(all_offers))
         return [o.to_state_dict() for o in new_offers], errors
 
+    async def scrape_sample_offers(
+        self,
+        max_pages: int = 1,
+        max_offers: int = 10,
+    ) -> tuple[list[dict], list[str]]:
+        """
+        Scrape a small live sample from kaufda.de without database deduplication.
+
+        This is used for human review flows where we want current catalog cards
+        even if they already exist in Supabase.
+        """
+        await self._load_robots_txt()
+
+        all_offers: list[RawOffer] = []
+        errors: list[str] = []
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 900},
+                locale="de-DE",
+            )
+
+            pages_to_scrape = [BASE_URL] + [
+                f"{BASE_URL}/kategorie/{slug}"
+                for slug in CATEGORIES
+                if not self._is_disallowed(f"/kategorie/{slug}")
+            ]
+
+            for page_url in pages_to_scrape:
+                if len(all_offers) >= max_offers:
+                    break
+                try:
+                    page_offers = await self._scrape_listing_page(
+                        context,
+                        page_url,
+                        max_pages,
+                        category=self._slug_from_url(page_url),
+                    )
+                    all_offers.extend(page_offers)
+                    logger.info("Scraped %d sample offers from %s", len(page_offers), page_url)
+                except Exception as exc:
+                    msg = f"Error scraping {page_url}: {exc}"
+                    logger.warning(msg)
+                    errors.append(msg)
+
+            await browser.close()
+
+        sample_offers = all_offers[:max_offers]
+        logger.info("Prepared %d sample offers for review", len(sample_offers))
+        return [o.to_state_dict() for o in sample_offers], errors
+
+    async def scrape_brochure_page_samples(
+        self,
+        retailers: list[str],
+        pages_per_brochure: int = 2,
+        max_items: int = 6,
+    ) -> tuple[list[dict], list[str]]:
+        """
+        Scrape flyer-page images from retailer brochure viewers.
+
+        This is intended for human review of multipage supermarket prospects.
+        """
+        errors: list[str] = []
+        samples: list[dict] = []
+
+        retailer_urls: list[tuple[str, str]] = []
+        for retailer in retailers:
+            url = RETAILER_PAGES.get(retailer)
+            if url:
+                retailer_urls.append((retailer, url))
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 900},
+                locale="de-DE",
+            )
+
+            for retailer, retailer_url in retailer_urls:
+                if len(samples) >= max_items:
+                    break
+                page = await context.new_page()
+                try:
+                    await page.goto(retailer_url, wait_until="networkidle", timeout=30_000)
+                    await self._dismiss_overlays(page)
+
+                    viewer = page.locator(".w-brochureViewer").first
+                    if await viewer.count() == 0:
+                        errors.append(f"No brochure viewer found for {retailer}")
+                        await page.close()
+                        continue
+
+                    brochure_preview = page.locator("img[alt*='Aktueller']").first
+                    brochure_title = await brochure_preview.get_attribute("alt") or f"{retailer.title()} Prospekt"
+                    validity_text = await brochure_preview.get_attribute("title")
+
+                    await viewer.click(force=True)
+                    await page.wait_for_timeout(3_000)
+                    await self._dismiss_overlays(page)
+
+                    viewer_url = page.url
+                    all_images = page.locator("img")
+                    image_count = await all_images.count()
+                    page_urls: list[str] = []
+                    for idx in range(image_count):
+                        src = await all_images.nth(idx).get_attribute("src")
+                        if not src or "zoomlarge_page_" not in src:
+                            continue
+                        cleaned = src.split("?")[0]
+                        if cleaned not in page_urls:
+                            page_urls.append(cleaned)
+
+                    for page_idx, image_url in enumerate(page_urls[:pages_per_brochure], start=1):
+                        samples.append(
+                            {
+                                "external_id": fingerprint_url(f"{viewer_url}#page={page_idx}"),
+                                "title": f"{retailer.title()} Prospekt Seite {page_idx}",
+                                "url": f"{viewer_url.split('&page=')[0]}&page={page_idx}",
+                                "image_url": image_url,
+                                "price": None,
+                                "original_price": None,
+                                "discount_percent": None,
+                                "store": retailer.title(),
+                                "category": "prospekt",
+                                "validity_text": validity_text,
+                                "valid_from": None,
+                                "valid_to": None,
+                                "is_upcoming": False,
+                                "scraped_at": datetime.now(UTC).isoformat(),
+                                "brochure_title": brochure_title,
+                                "page_number": page_idx,
+                            }
+                        )
+                        if len(samples) >= max_items:
+                            break
+
+                except Exception as exc:
+                    msg = f"Error scraping brochure pages for {retailer}: {exc}"
+                    logger.warning(msg)
+                    errors.append(msg)
+                finally:
+                    await page.close()
+
+            await browser.close()
+
+        return samples[:max_items], errors
+
     # ── Private helpers ───────────────────────────────────────────────────────
 
     async def _scrape_listing_page(
@@ -112,6 +287,7 @@ class KaufdaScraper:
             page = await context.new_page()
             try:
                 await page.goto(current_url, wait_until="networkidle", timeout=30_000)
+                await self._dismiss_overlays(page)
                 page_offers = await self._extract_offers_from_page(page, category)
                 offers.extend(page_offers)
 
@@ -137,15 +313,12 @@ class KaufdaScraper:
     ) -> list[RawOffer]:
         """Extract all offer cards from the current DOM state."""
         offers: list[RawOffer] = []
+        image_cards = page.locator("img[title*='Angebot im aktuellen Prospekt']")
+        card_count = await image_cards.count()
 
-        # kaufda.de renders offer cards — these selectors target the common card pattern.
-        # Adjust if kaufda updates their markup.
-        card_selector = "article, [class*='offer'], [class*='deal'], [class*='product-card']"
-        cards = await page.query_selector_all(card_selector)
-
-        for card in cards:
+        for idx in range(card_count):
             try:
-                offer = await self._parse_card(card, page.url, category)
+                offer = await self._parse_offer_card(page, image_cards.nth(idx), category)
                 if offer:
                     offers.append(offer)
             except Exception as exc:
@@ -153,65 +326,104 @@ class KaufdaScraper:
 
         return offers
 
-    async def _parse_card(self, card, page_url: str, category: Optional[str]) -> Optional[RawOffer]:
-        """Extract offer fields from a single card element."""
-        # Title
-        title_el = await card.query_selector("h2, h3, [class*='title'], [class*='name']")
-        title = (await title_el.inner_text()).strip() if title_el else None
-        if not title or len(title) < 3:
+    async def _parse_offer_card(self, page: Page, image_locator, category: Optional[str]) -> Optional[RawOffer]:
+        """Extract one product-offer card from the current Kaufda layout."""
+        card = image_locator.locator(
+            "xpath=ancestor::div[contains(@class,'group') and contains(@class,'border-gray')][1]"
+        )
+        if await card.count() == 0:
             return None
 
-        # URL
-        link_el = await card.query_selector("a[href]")
-        if not link_el:
+        raw_card_text = await card.inner_text()
+        if not raw_card_text:
             return None
-        href = await link_el.get_attribute("href")
-        url = canonical_url(BASE_URL, href)
 
-        # Image
-        img_el = await card.query_selector("img[src], img[data-src]")
-        image_url = None
-        if img_el:
-            image_url = (
-                await img_el.get_attribute("src")
-                or await img_el.get_attribute("data-src")
-            )
-            if image_url and image_url.startswith("//"):
-                image_url = "https:" + image_url
+        text_lines = [line.strip() for line in raw_card_text.splitlines() if line.strip()]
+        if len(text_lines) < 3:
+            return None
+        card_text = " ".join(text_lines)
 
-        # Price
-        price_el = await card.query_selector("[class*='price-current'], [class*='current-price'], [class*='price']")
-        price = clean_price(await price_el.inner_text() if price_el else None)
+        image_url = await image_locator.get_attribute("src") or await image_locator.get_attribute("data-src")
+        if image_url and image_url.startswith("//"):
+            image_url = "https:" + image_url
 
-        # Original price
-        orig_el = await card.query_selector("[class*='price-old'], [class*='original-price'], [class*='was'], del, s")
-        original_price = clean_price(await orig_el.inner_text() if orig_el else None)
+        brand = text_lines[0]
+        store = text_lines[-2] if len(text_lines) >= 2 else None
+        price = clean_price(text_lines[-1]) if text_lines else None
+        title = " ".join(text_lines[1:-2]).strip() if len(text_lines) > 3 else (text_lines[1] if len(text_lines) > 1 else None)
+        if not title:
+            alt_text = await image_locator.get_attribute("alt")
+            title = self._title_from_alt(alt_text)
+        if not title or not price:
+            return None
 
-        # Discount badge
-        disc_el = await card.query_selector("[class*='discount'], [class*='badge'], [class*='saving']")
-        discount_raw = await disc_el.inner_text() if disc_el else None
-        discount_percent = clean_discount(discount_raw)
+        detail_url, detail_text = await self._open_offer_detail(page, card)
+        validity = parse_offer_validity(detail_text or card_text)
+        loyalty = extract_loyalty_condition(detail_text or card_text)
+        resolved_prices = resolve_offer_prices(
+            price,
+            detail_text or card_text,
+            loyalty["requires_loyalty"],
+        )
 
-        # Compute discount from prices if badge not found
-        if discount_percent is None and price and original_price and original_price > 0:
-            discount_percent = round((1 - price / original_price) * 100, 1)
-
-        # Store
-        store_el = await card.query_selector("[class*='store'], [class*='shop'], [class*='retailer'], [class*='brand']")
-        store = (await store_el.inner_text()).strip() if store_el else None
+        original_price = self._extract_original_price(detail_text)
+        discount_percent = None
+        effective_price = resolved_prices["loyalty_price"] or resolved_prices["standard_price"] or price
+        if effective_price and original_price and original_price > 0:
+            discount_percent = round((1 - effective_price / original_price) * 100, 1)
 
         return RawOffer(
-            external_id=fingerprint_url(url),
+            external_id=fingerprint_url(detail_url),
             title=title,
-            url=url,
+            url=detail_url,
             image_url=image_url,
-            price=price,
+            price=resolved_prices["price"],
+            standard_price=resolved_prices["standard_price"],
+            loyalty_price=resolved_prices["loyalty_price"],
             original_price=original_price,
             discount_percent=discount_percent,
             store=store,
             category=category,
-            scraped_at=datetime.utcnow(),
+            requires_loyalty=loyalty["requires_loyalty"],
+            loyalty_program=loyalty["loyalty_program"],
+            price_condition_text=loyalty["price_condition_text"],
+            validity_text=validity["validity_text"],
+            valid_from=validity["valid_from"],
+            valid_to=validity["valid_to"],
+            is_upcoming=validity["is_upcoming"],
+            scraped_at=datetime.now(UTC),
         )
+
+    async def _open_offer_detail(self, page: Page, card) -> tuple[str, str]:
+        """Open a product offer detail page, read its text, then go back."""
+        start_url = page.url
+        await self._dismiss_overlays(page)
+        await card.click(timeout=10_000, force=True)
+        await page.wait_for_timeout(3_000)
+        detail_url = page.url
+        detail_text = " ".join((await page.locator("body").inner_text()).split())
+        if detail_url != start_url:
+            await page.go_back(wait_until="domcontentloaded")
+            await page.wait_for_timeout(2_000)
+        return detail_url, detail_text
+
+    @staticmethod
+    def _title_from_alt(alt_text: str | None) -> Optional[str]:
+        """Extract a product title from Kaufda image alt text."""
+        if not alt_text:
+            return None
+        match = re.match(r"(.+?)\s+bei\s+.+?\s+im Prospekt", alt_text)
+        if match:
+            return match.group(1).strip()
+        return alt_text.strip()
+
+    @staticmethod
+    def _extract_original_price(text: str | None) -> Optional[float]:
+        """Best-effort extraction of an old price from detail text."""
+        if not text:
+            return None
+        match = re.search(r"(?:statt|war)\s+(\d[\d\.,]*)\s*€", text, re.IGNORECASE)
+        return clean_price(match.group(1)) if match else None
 
     async def _get_next_page_url(self, page: Page, current_url: str) -> Optional[str]:
         """Find the 'next page' link on a listing page."""
@@ -269,6 +481,32 @@ class KaufdaScraper:
 
     def _is_disallowed(self, path: str) -> bool:
         return any(path.startswith(d) for d in self._disallowed if d and d != "/")
+
+    async def _dismiss_overlays(self, page: Page) -> None:
+        """Best-effort removal of consent overlays that block pointer events."""
+        try:
+            await page.evaluate(
+                """
+                () => {
+                  const selectors = [
+                    '#usercentrics-cmp-ui',
+                    '[data-nosnippet="1"]#usercentrics-cmp-ui',
+                    '[data-testid="uc-overlay"]',
+                    '.uc-overlay',
+                    '.uc-embedding-container',
+                  ];
+                  for (const selector of selectors) {
+                    for (const el of document.querySelectorAll(selector)) {
+                      el.remove();
+                    }
+                  }
+                  document.documentElement.style.overflow = 'auto';
+                  document.body.style.overflow = 'auto';
+                }
+                """
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _slug_from_url(url: str) -> Optional[str]:

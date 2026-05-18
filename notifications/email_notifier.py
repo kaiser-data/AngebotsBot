@@ -54,7 +54,7 @@ def _build_html_email(sections: list[tuple[str, list[dict]]]) -> str:
     {''.join(offer_blocks)}
     <hr style="margin-top:32px;border:none;border-top:1px solid #eee">
     <p style="color:#888;font-size:12px">
-        AngebotsBot — powered by Qwen VL 32B &amp; kaufda.de<br>
+        AngebotsBot — powered by Gemini &amp; kaufda.de<br>
         Um Benachrichtigungen zu verwalten, öffne den Telegram-Bot oder die Web-App.
     </p>
 </body>

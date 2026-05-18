@@ -1,6 +1,7 @@
 """Format offer data as Telegram HTML messages."""
 
 from typing import Optional
+from scraper.utils import format_validity_window
 
 
 def offer_card_html(offer: dict, index: Optional[int] = None) -> str:
@@ -27,6 +28,9 @@ def offer_card_html(offer: dict, index: Optional[int] = None) -> str:
         lines.append(f"{verdict_emoji} {verdict}")
     if feat_str:
         lines.append(f"📋 {feat_str}")
+    validity = format_validity_window(offer)
+    if validity:
+        lines.append(f"🗓️ {_esc(validity)}")
 
     return "\n".join(lines)
 

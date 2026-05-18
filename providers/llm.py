@@ -1,4 +1,4 @@
-"""Text LLM provider — Featherless OpenAI-compatible endpoint."""
+"""Text LLM provider — Gemini OpenAI-compatible endpoint."""
 
 from functools import lru_cache
 
@@ -9,11 +9,11 @@ import config
 
 @lru_cache(maxsize=1)
 def get_llm(temperature: float = 0.1) -> ChatOpenAI:
-    """Return a ChatOpenAI instance pointing at Featherless."""
+    """Return a ChatOpenAI instance pointing at Gemini."""
     return ChatOpenAI(
         model=config.TEXT_MODEL,
-        openai_api_key=config.FEATHERLESS_API_KEY,
-        openai_api_base=config.FEATHERLESS_BASE_URL,
+        openai_api_key=config.GEMINI_API_KEY,
+        openai_api_base=config.GEMINI_BASE_URL,
         temperature=temperature,
-        max_tokens=2048,
+        max_tokens=4096,
     )

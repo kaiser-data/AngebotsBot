@@ -1,4 +1,4 @@
-"""Vision LLM provider — Qwen2.5-VL-32B-Instruct via Featherless."""
+"""Vision LLM provider — Gemini via OpenAI-compatible endpoint."""
 
 from functools import lru_cache
 
@@ -9,10 +9,10 @@ import config
 
 @lru_cache(maxsize=1)
 def get_vision_client() -> AsyncOpenAI:
-    """Return an async OpenAI client configured for Featherless vision model."""
+    """Return an async OpenAI client configured for Gemini vision model."""
     return AsyncOpenAI(
-        api_key=config.FEATHERLESS_API_KEY,
-        base_url=config.FEATHERLESS_BASE_URL,
+        api_key=config.GEMINI_API_KEY,
+        base_url=config.GEMINI_BASE_URL,
     )
 
 
