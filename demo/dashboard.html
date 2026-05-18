@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AngebotsBot Demo Dashboard</title>
+  <style>
+    :root {
+      --bg: #f7f3ea;
+      --panel: rgba(255,255,255,0.84);
+      --ink: #10231c;
+      --muted: #5c6f67;
+      --line: rgba(16,35,28,0.10);
+      --teal: #0f766e;
+      --orange: #c2410c;
+      --gold: #d6a229;
+      --shadow: 0 18px 50px rgba(16,35,28,0.10);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(214,162,41,0.18), transparent 24%),
+        radial-gradient(circle at 85% 10%, rgba(15,118,110,0.14), transparent 22%),
+        linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+    }
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 36px 20px 56px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 20px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+    .hero-card, .panel {
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.5);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      border-radius: 24px;
+    }
+    .hero-card {
+      padding: 28px 28px 26px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -8% -45% auto;
+      width: 260px;
+      height: 260px;
+      background: radial-gradient(circle, rgba(15,118,110,0.18), transparent 60%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: var(--teal);
+      margin-bottom: 12px;
+      font-weight: 700;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    h1 {
+      font-size: clamp(36px, 6vw, 64px);
+      line-height: 0.95;
+      margin: 0 0 14px;
+      letter-spacing: -0.04em;
+    }
+    .hero-copy {
+      font-size: 17px;
+      line-height: 1.6;
+      color: var(--muted);
+      max-width: 58ch;
+      margin: 0 0 20px;
+    }
+    .hero-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .chip {
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: rgba(16,35,28,0.06);
+      color: var(--ink);
+      font-size: 13px;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    .snapshot {
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .snapshot-stat {
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .snapshot-stat:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+    .snapshot-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    .snapshot-value {
+      font-size: 34px;
+      line-height: 1;
+      margin: 8px 0 6px;
+    }
+    .snapshot-note {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .metric-card {
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.5);
+      box-shadow: var(--shadow);
+      border-radius: 22px;
+      padding: 20px;
+    }
+    .metric-label {
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 12px;
+    }
+    .metric-value {
+      font-size: clamp(28px, 5vw, 42px);
+      line-height: 1;
+      margin-bottom: 10px;
+    }
+    .metric-note {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+    .panel {
+      padding: 24px;
+    }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      letter-spacing: -0.03em;
+    }
+    .panel-copy {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      margin: 0 0 16px;
+    }
+    .chart-svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .grid-line {
+      stroke: rgba(16,35,28,0.12);
+      stroke-width: 1;
+    }
+    .axis-label {
+      fill: #667a72;
+      font-size: 11px;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    .value-label {
+      fill: #10231c;
+      font-size: 12px;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      font-weight: 700;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    tr:last-child td {
+      border-bottom: 0;
+    }
+    .footnote {
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    @media (max-width: 960px) {
+      .hero, .layout, .metric-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <article class="hero-card">
+        <div class="eyebrow">AngebotsBot Demo Dashboard</div>
+        <h1>Live retail promo intelligence for a convincing product demo.</h1>
+        <p class="hero-copy">
+          This dashboard turns the current Supabase scrape into a market snapshot:
+          volume, store coverage, discount intensity, expiring offers, and the earliest
+          signal for next-week inventory.
+        </p>
+        <div class="hero-chips">
+          <span class="chip">Last refresh: 2026-05-16 21:46 UTC</span>
+          <span class="chip">Data window starts: 2026-05-16</span>
+          <span class="chip">Next-week preview: No next-week start dates are currently published in the live source.</span>
+        </div>
+      </article>
+      <aside class="hero-card snapshot">
+        <div class="snapshot-stat">
+          <div class="snapshot-label">Current market stance</div>
+          <div class="snapshot-value">4.815</div>
+          <div class="snapshot-note">Offers valid right now, useful for showing immediate search and alert value.</div>
+        </div>
+        <div class="snapshot-stat">
+          <div class="snapshot-label">High-discount pool</div>
+          <div class="snapshot-value">1.448</div>
+          <div class="snapshot-note">Offers at 25%+ discount, the easiest story for a demo narrative.</div>
+        </div>
+        <div class="snapshot-stat">
+          <div class="snapshot-label">Next-week preview</div>
+          <div class="snapshot-value">0</div>
+          <div class="snapshot-note">No next-week start dates are currently published in the live source.</div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="metric-grid">
+      
+        <section class="metric-card">
+          <div class="metric-label">Total offers</div>
+          <div class="metric-value">6.705</div>
+          <div class="metric-note">All currently stored rows</div>
+        </section>
+        
+        <section class="metric-card">
+          <div class="metric-label">Current this week</div>
+          <div class="metric-value">4.815</div>
+          <div class="metric-note">Valid now in the market</div>
+        </section>
+        
+        <section class="metric-card">
+          <div class="metric-label">Upcoming</div>
+          <div class="metric-value">1.890</div>
+          <div class="metric-note">Preview inventory for later validity</div>
+        </section>
+        
+        <section class="metric-card">
+          <div class="metric-label">Stores covered</div>
+          <div class="metric-value">50</div>
+          <div class="metric-note">Distinct retailers in the dataset</div>
+        </section>
+        
+        <section class="metric-card">
+          <div class="metric-label">Discounted offers</div>
+          <div class="metric-value">2.346</div>
+          <div class="metric-note">Average discount 31.4%</div>
+        </section>
+        
+        <section class="metric-card">
+          <div class="metric-label">Trend window</div>
+          <div class="metric-value">1 days</div>
+          <div class="metric-note">2026-05-16 to 2026-05-16</div>
+        </section>
+        
+    </section>
+
+    <section class="layout">
+      <article class="panel">
+        <h2>Ingestion Trend</h2>
+        <p class="panel-copy">
+          This is the cleanest trend we can show today: how many live offers were added to the
+          dataset each day as the crawl expanded.
+        </p>
+        <svg viewBox="0 0 980 320" class="chart-svg" role="img" aria-label="Offers over time"><line x1="42" y1="270.0" x2="956" y2="270.0" class="grid-line"></line><text x="34" y="274.0" class="axis-label" text-anchor="end">0</text><line x1="42" y1="208.5" x2="956" y2="208.5" class="grid-line"></line><text x="34" y="212.5" class="axis-label" text-anchor="end">1676</text><line x1="42" y1="147.0" x2="956" y2="147.0" class="grid-line"></line><text x="34" y="151.0" class="axis-label" text-anchor="end">3352</text><line x1="42" y1="85.5" x2="956" y2="85.5" class="grid-line"></line><text x="34" y="89.5" class="axis-label" text-anchor="end">5028</text><line x1="42" y1="24.0" x2="956" y2="24.0" class="grid-line"></line><text x="34" y="28.0" class="axis-label" text-anchor="end">6705</text><polygon points="42,270 42.0,24.0 956,270" fill="rgba(15,118,110,0.12)"></polygon><polyline points="42.0,24.0" fill="none" stroke="#0f766e" stroke-width="4" stroke-linecap="round"></polyline><circle cx="42.0" cy="24.0" r="5" fill="#0f766e"></circle><text x="42.0" y="294" class="axis-label" text-anchor="middle">16 May</text><text x="42.0" y="12.0" class="value-label" text-anchor="middle">6705</text></svg>
+      </article>
+      <div class="stack">
+        <article class="panel">
+          <h2>Top Stores</h2>
+          <p class="panel-copy">Retailer mix across the current active dataset.</p>
+          <svg viewBox="0 0 840 320" class="chart-svg" role="img" aria-label="Horizontal bar chart"><text x="130" y="29.5" class="axis-label" text-anchor="end">Lidl</text><rect x="140" y="16" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="16" width="676" height="19" rx="7" fill="#0f766e"></rect><text x="826" y="29.5" class="value-label">639</text><text x="130" y="58.5" class="axis-label" text-anchor="end">REWE</text><rect x="140" y="45" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="45" width="611" height="19" rx="7" fill="#0f766e"></rect><text x="761" y="58.5" class="value-label">578</text><text x="130" y="87.5" class="axis-label" text-anchor="end">Netto Marken-Discount</text><rect x="140" y="74" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="74" width="506" height="19" rx="7" fill="#0f766e"></rect><text x="656" y="87.5" class="value-label">479</text><text x="130" y="116.5" class="axis-label" text-anchor="end">Penny</text><rect x="140" y="103" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="103" width="461" height="19" rx="7" fill="#0f766e"></rect><text x="611" y="116.5" class="value-label">436</text><text x="130" y="145.5" class="axis-label" text-anchor="end">E center</text><rect x="140" y="132" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="132" width="379" height="19" rx="7" fill="#0f766e"></rect><text x="529" y="145.5" class="value-label">359</text><text x="130" y="174.5" class="axis-label" text-anchor="end">Höffner</text><rect x="140" y="161" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="161" width="350" height="19" rx="7" fill="#0f766e"></rect><text x="500" y="174.5" class="value-label">331</text><text x="130" y="203.5" class="axis-label" text-anchor="end">Netto mit dem Scottie</text><rect x="140" y="190" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="190" width="341" height="19" rx="7" fill="#0f766e"></rect><text x="491" y="203.5" class="value-label">323</text><text x="130" y="232.5" class="axis-label" text-anchor="end">Sconto SB</text><rect x="140" y="219" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="219" width="300" height="19" rx="7" fill="#0f766e"></rect><text x="450" y="232.5" class="value-label">284</text><text x="130" y="261.5" class="axis-label" text-anchor="end">EDEKA</text><rect x="140" y="248" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="248" width="283" height="19" rx="7" fill="#0f766e"></rect><text x="433" y="261.5" class="value-label">268</text><text x="130" y="290.5" class="axis-label" text-anchor="end">Rossmann</text><rect x="140" y="277" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="277" width="229" height="19" rx="7" fill="#0f766e"></rect><text x="379" y="290.5" class="value-label">217</text></svg>
+        </article>
+        <article class="panel">
+          <h2>Top Categories</h2>
+          <p class="panel-copy">Keyword/category density from kaufda inventory.</p>
+          <svg viewBox="0 0 840 320" class="chart-svg" role="img" aria-label="Horizontal bar chart"><text x="130" y="29.5" class="axis-label" text-anchor="end">Bananen</text><rect x="140" y="16" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="16" width="676" height="19" rx="7" fill="#c2410c"></rect><text x="826" y="29.5" class="value-label">24</text><text x="130" y="58.5" class="axis-label" text-anchor="end">Antipasti</text><rect x="140" y="45" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="45" width="619" height="19" rx="7" fill="#c2410c"></rect><text x="769" y="58.5" class="value-label">22</text><text x="130" y="87.5" class="axis-label" text-anchor="end">Bettwaesche</text><rect x="140" y="74" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="74" width="619" height="19" rx="7" fill="#c2410c"></rect><text x="769" y="87.5" class="value-label">22</text><text x="130" y="116.5" class="axis-label" text-anchor="end">Blumen</text><rect x="140" y="103" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="103" width="591" height="19" rx="7" fill="#c2410c"></rect><text x="741" y="116.5" class="value-label">21</text><text x="130" y="145.5" class="axis-label" text-anchor="end">Aufbewahrungsdosen</text><rect x="140" y="132" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="132" width="563" height="19" rx="7" fill="#c2410c"></rect><text x="713" y="145.5" class="value-label">20</text><text x="130" y="174.5" class="axis-label" text-anchor="end">Akku-Rasenmaeher</text><rect x="140" y="161" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="161" width="563" height="19" rx="7" fill="#c2410c"></rect><text x="713" y="174.5" class="value-label">20</text><text x="130" y="203.5" class="axis-label" text-anchor="end">Ampelschirm</text><rect x="140" y="190" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="190" width="563" height="19" rx="7" fill="#c2410c"></rect><text x="713" y="203.5" class="value-label">20</text><text x="130" y="232.5" class="axis-label" text-anchor="end">Apfel</text><rect x="140" y="219" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="219" width="563" height="19" rx="7" fill="#c2410c"></rect><text x="713" y="232.5" class="value-label">20</text><text x="130" y="261.5" class="axis-label" text-anchor="end">Arbeitstisch</text><rect x="140" y="248" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="248" width="563" height="19" rx="7" fill="#c2410c"></rect><text x="713" y="261.5" class="value-label">20</text><text x="130" y="290.5" class="axis-label" text-anchor="end">Becks</text><rect x="140" y="277" width="676" height="19" rx="7" fill="#dcefeb"></rect><rect x="140" y="277" width="563" height="19" rx="7" fill="#c2410c"></rect><text x="713" y="290.5" class="value-label">20</text></svg>
+        </article>
+      </div>
+    </section>
+
+    <section class="layout">
+      <article class="panel">
+        <h2>Best Discounts Right Now</h2>
+        <p class="panel-copy">A fast demo section for “what are the strongest deals today?”</p>
+        <table><thead><tr><th>Offer</th><th>Store</th><th>Price</th><th>Discount</th><th>Valid To</th></tr></thead><tbody><tr><td>Esstisch</td><td>ROLLER</td><td>EUR 229,99</td><td>99.4%</td><td>2026-05-23</td></tr><tr><td>Kinder Creamy</td><td>Netto Marken-Discount</td><td>EUR 1,04</td><td>97.8%</td><td>2026-05-31</td></tr><tr><td>Melissa Popcornmaschine</td><td>Netto mit dem Scottie</td><td>EUR 0,99</td><td>97.2%</td><td>2026-05-23</td></tr><tr><td>Melissa Popcornmaschine</td><td>Netto mit dem Scottie</td><td>EUR 0,99</td><td>97.2%</td><td>2026-05-23</td></tr><tr><td>Coke</td><td>Netto Marken-Discount</td><td>EUR 1,87</td><td>96.8%</td><td>2026-05-31</td></tr><tr><td>Wattsup Stand up Paddle 10’2 Manta Set</td><td>Decathlon</td><td>EUR 9,99</td><td>96.0%</td><td>2026-06-14</td></tr><tr><td>Harvest Best Erbsen</td><td>Netto mit dem Scottie</td><td>EUR 0,99</td><td>91.7%</td><td>2026-05-23</td></tr><tr><td>Sonax Klima Power Cleaner AirAid Orange+ Rosemary</td><td>Bosch Car Service</td><td>EUR 10,99</td><td>90.0%</td><td>2026-05-23</td></tr><tr><td>RUNDSKOLM Tagesdecke</td><td>JYSK</td><td>EUR 5,00</td><td>90.0%</td><td>2026-06-06</td></tr><tr><td>Vierkantpfosten 7 x 7 x 120 cm</td><td>toom Baumarkt</td><td>EUR 4,49</td><td>86.0%</td><td>2026-05-22</td></tr></tbody></table>
+      </article>
+      <div class="stack">
+        <article class="panel">
+          <h2>Expiring Soon</h2>
+          <p class="panel-copy">Useful for urgency-based alerts and recap messaging.</p>
+          <table><thead><tr><th>Offer</th><th>Store</th><th>Discount</th><th>Valid To</th></tr></thead><tbody><tr><td>brabantia Vakuum-Glas</td><td>Penny</td><td>84.3%</td><td>2026-05-16</td></tr><tr><td>Brabantia Frischhaltebox für den Kühlschrank</td><td>Penny</td><td>83.4%</td><td>2026-05-16</td></tr><tr><td>STRENESSE BLUE Sweatshirt/-jacke Damen</td><td>Lidl</td><td>83.3%</td><td>2026-05-16</td></tr><tr><td>MDF-Platte</td><td>Hellweg</td><td>82.7%</td><td>2026-05-16</td></tr><tr><td>Herren Sweatjacke</td><td>Netto Marken-Discount</td><td>75.0%</td><td>2026-05-16</td></tr><tr><td>Philips Bodenstaubsauger XB1142/10</td><td>Penny</td><td>73.0%</td><td>2026-05-16</td></tr><tr><td>KRUPS Kaffeevollautomat Typ EA81P0</td><td>Lidl</td><td>72.4%</td><td>2026-05-16</td></tr><tr><td>Camp David Herren Polo-Shirt</td><td>Netto Marken-Discount</td><td>71.4%</td><td>2026-05-16</td></tr><tr><td>STRENESSE BLUE T-Shirt Damen S (36/38)</td><td>Lidl</td><td>71.4%</td><td>2026-05-16</td></tr><tr><td>Old Spice Duschgel XL</td><td>Thomas Philipps</td><td>70.3%</td><td>2026-05-16</td></tr></tbody></table>
+        </article>
+        <article class="panel">
+          <h2>Next Week Preview</h2>
+          <p class="panel-copy">Preview rows only appear when the source publishes future validity windows.</p>
+          <div class="footnote">No next-week start dates are currently available from the live source. The schema is ready for them as soon as kaufda publishes preview inventory.</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="layout">
+      <article class="panel">
+        <h2>Live Data Proof</h2>
+        <p class="panel-copy">
+          This section is intentionally raw. These rows come directly from the live Supabase
+          <code>offers</code> table at dashboard generation time, with no mock data layer.
+        </p>
+        <table><thead><tr><th>External ID</th><th>Store</th><th>Title</th><th>Valid To</th></tr></thead><tbody><tr><td>85f4d578-7551-49fc-a579-924704df1857</td><td>Action</td><td>Prologic Daten- und Ladekabel 8-Pin</td><td>2026-05-19</td></tr><tr><td>605187fa-cc3c-4433-9e26-746e824acc2c</td><td>Action</td><td>Prologic Daten- und Ladekabel 8-Pin</td><td>2026-05-19</td></tr><tr><td>97e1f57d-350d-45bc-81a3-e5938bef2990</td><td>Penny</td><td>True Style Herren-Retroshorts</td><td>2026-05-23</td></tr><tr><td>665d6ada-3c56-4c10-b421-99eb589dca5a</td><td>Netto Marken-Discount</td><td>Erima Retroshorts</td><td>2026-05-23</td></tr><tr><td>b99480f8-b8db-4a51-a778-3ddbcb2ddc35</td><td>Netto mit dem Scottie</td><td>Mebus Funk-Wetterstation 40689 schwarz</td><td>2026-05-16</td></tr><tr><td>60291592-684a-4c74-a182-26bde02f1bb2</td><td>Kaufland</td><td>MEBUS Kinder-SOS-Smartwatch Pink</td><td>2026-05-20</td></tr><tr><td>cfe6f434-9b43-49a8-8903-98e77cbf6f4a</td><td>Lidl</td><td>AURIOL Funk-Wetterstation mit Lüftungsempfehlung</td><td>2026-05-16</td></tr><tr><td>4ae44109-fd0f-4b93-a5fa-0f405b572b21</td><td>Lidl</td><td>LIVARNO Funkwanduhr</td><td>2026-05-23</td></tr><tr><td>b1a1fab9-d9de-493d-a6fb-c6f2c9c950d6</td><td>XXXLutz Möbelhäuser</td><td>Tempur Pro® Luxe CoolQuilt Lgf. ca. 90 x 200 cm</td><td>2026-05-24</td></tr><tr><td>fd2b7267-35ed-44a1-b634-8f0f38efd181</td><td>XXXLutz Möbelhäuser</td><td>Classic Boxspringbett Cosy</td><td>2026-05-24</td></tr><tr><td>afdb07c3-484a-49f6-874f-04ff2d388072</td><td>XXXLutz Möbelhäuser</td><td>Schlafkissen</td><td>2026-05-24</td></tr><tr><td>f24c7097-5983-434f-83d2-c46e04c59509</td><td>XXXLutz Möbelhäuser</td><td>Tempur® Explorer Hybrid Lgf. ca. 90 x 200 cm</td><td>2026-05-24</td></tr></tbody></table>
+      </article>
+      <article class="panel">
+        <h2>Source Reality</h2>
+        <p class="panel-copy">
+          The dashboard is generated from production scrape data already stored in Supabase.
+          It is not based on hardcoded examples.
+        </p>
+        <div class="footnote">
+          <strong>Rows in dataset:</strong> 6.705<br>
+          <strong>First scraped row in this dataset:</strong> 2026-05-16T18:49:07.633687+00:00<br>
+          <strong>Latest scraped row in this dataset:</strong> 2026-05-16T21:18:56.324859+00:00<br>
+          <strong>Current offers valid now:</strong> 4.815<br>
+          <strong>Upcoming offers:</strong> 1.890<br>
+          <strong>Next-week starts currently visible:</strong> 0
+        </div>
+      </article>
+    </section>
+
+    <div class="footnote">
+      Built from the live Supabase <code>offers</code> table. Historical backfill before the first scrape date is not available from the current source path, so trend lines begin when collection started.
+    </div>
+  </div>
+</body>
+</html>
