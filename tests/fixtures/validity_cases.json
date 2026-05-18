@@ -1,0 +1,57 @@
+[
+  {
+    "id": "date_range_same_month",
+    "raw_text": "Samsung TV gültig vom 16.05. bis 18.05.",
+    "reference_date": "2026-05-16",
+    "expected": {
+      "validity_text": "gültig vom 16.05. bis 18.05.",
+      "valid_from": "2026-05-16",
+      "valid_to": "2026-05-18",
+      "is_upcoming": false
+    }
+  },
+  {
+    "id": "starts_on_saturday",
+    "raw_text": "Top Angebot ab Samstag",
+    "reference_date": "2026-05-16",
+    "expected": {
+      "validity_text": "ab Samstag",
+      "valid_from": "2026-05-16",
+      "valid_to": null,
+      "is_upcoming": false
+    }
+  },
+  {
+    "id": "starts_next_thursday",
+    "raw_text": "Frische Angebote ab Donnerstag",
+    "reference_date": "2026-05-16",
+    "expected": {
+      "validity_text": "ab Donnerstag",
+      "valid_from": "2026-05-21",
+      "valid_to": null,
+      "is_upcoming": true
+    }
+  },
+  {
+    "id": "only_one_day",
+    "raw_text": "Knallerpreis nur am 21.05.",
+    "reference_date": "2026-05-16",
+    "expected": {
+      "validity_text": "nur am 21.05.",
+      "valid_from": "2026-05-21",
+      "valid_to": "2026-05-21",
+      "is_upcoming": true
+    }
+  },
+  {
+    "id": "until_wednesday",
+    "raw_text": "Nur diese Woche bis Mittwoch",
+    "reference_date": "2026-05-16",
+    "expected": {
+      "validity_text": "bis Mittwoch",
+      "valid_from": null,
+      "valid_to": "2026-05-20",
+      "is_upcoming": false
+    }
+  }
+]

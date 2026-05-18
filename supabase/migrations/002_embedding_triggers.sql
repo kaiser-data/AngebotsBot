@@ -23,12 +23,12 @@ declare
     v_payload jsonb;
 begin
     -- Supabase-Projektdaten aus den Vault-Secrets lesen
-    -- (einmalig setzen: supabase secrets set SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...)
+    -- (einmalig setzen: supabase secrets set APP_SUPABASE_URL=... APP_SUPABASE_SERVICE_ROLE_KEY=...)
     select decrypted_secret into v_url
-        from vault.decrypted_secrets where name = 'SUPABASE_URL';
+        from vault.decrypted_secrets where name = 'APP_SUPABASE_URL';
 
     select decrypted_secret into v_key
-        from vault.decrypted_secrets where name = 'SUPABASE_SERVICE_ROLE_KEY';
+        from vault.decrypted_secrets where name = 'APP_SUPABASE_SERVICE_ROLE_KEY';
 
     v_url := v_url || '/functions/v1/generate-embedding';
 
