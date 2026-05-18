@@ -1,25 +1,69 @@
+# ─── Secrets ────────────────────────────────────────────────────────────────
+# Never commit these. Only their *.example siblings should ship.
 .env
-*.kate-swp
-*.swp
-*.swo
-.venv/
+.env.*
+!.env.example
+**/.env.local
+**/.env.*.local
+
+# Generated SQL files that bake in Supabase Vault secrets (regeneratable from
+# .env via supabase/generate_*.py scripts).
+supabase/vault_secrets.sql
+supabase/one_shot_setup.sql
+supabase/full_setup.sql
+
+# ─── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-dist/
-build/
-.venv/
-venv/
-env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 htmlcov/
 .coverage
+.coverage.*
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Build artifacts
+dist/
+build/
+
+# ─── Node / Next.js (dashboard) ─────────────────────────────────────────────
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/cache
+.yarn/install-state.gz
+# Next.js build output (per app)
+.next/
+out/
+# Vercel / Netlify local state
+.vercel/
+.netlify/
+# TypeScript
+*.tsbuildinfo
+
+# ─── Editor / OS noise ──────────────────────────────────────────────────────
+*.swp
+*.swo
+*.kate-swp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ─── Logs and databases ─────────────────────────────────────────────────────
 *.log
 *.db
 *.sqlite3
+
+# ─── Tool-specific caches / outputs ─────────────────────────────────────────
 # Playwright
 playwright/.auth/
 # Sentence transformers cache
@@ -27,3 +71,7 @@ playwright/.auth/
 # Supabase local
 .supabase/
 supabase/.temp/
+# Graphify generated output (rebuildable via `graphify update .`)
+graphify-out/
+# Chainlit auto-generated translations and runtime files
+.chainlit/.files/
