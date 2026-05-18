@@ -138,6 +138,16 @@ SUBCATEGORY_GUIDANCE = "Erlaubte Unterkategorien pro Kategorie (KEINE anderen er
     for bucket, subs in SUBCATEGORIES.items()
 )
 
+# Pre-rendered as a top-level string so the SYSTEM_PROMPT f-string below
+# doesn't need any escapes inside its expressions (Python 3.11 forbids
+# backslashes inside f-string expression parts; PEP 701 only lifts that
+# restriction in 3.12+).
+_FEW_SHOT_BLOCK = "\n".join(
+    f"  Input:  {{title='{ex['title']}', store='{ex['store']}', kaufda_category='{ex['kaufda_category']}'}}\n"
+    f"  Output: {ex['expected']}"
+    for ex in FEW_SHOT_EXAMPLES
+)
+
 SYSTEM_PROMPT = f"""Du bist ein Klassifikations-Service für deutsche Supermarkt- und Drogerie-Angebote.
 
 Für jedes Angebot wählst du GENAU EINE Kategorie aus dieser festen Taxonomie:
@@ -164,11 +174,7 @@ Disambiguierung wichtiger Verwechslungen:
 {SUBCATEGORY_GUIDANCE}
 
 Beispiele (input → expected output):
-{chr(10).join(
-    f"  Input:  {{title='{ex['title']}', store='{ex['store']}', kaufda_category='{ex['kaufda_category']}'}}\n"
-    f"  Output: {ex['expected']}"
-    for ex in FEW_SHOT_EXAMPLES
-)}
+{_FEW_SHOT_BLOCK}
 
 Antworte ausschließlich mit gültigem JSON in genau diesem Format:
 {{"results": [
@@ -354,6 +360,7 @@ def upsert_rows(rows: list[dict]) -> int:
 
 
 def main() -> int:
+    global MODEL_VERSION
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=200, help="Max offers to process (default 200)")
     ap.add_argument("--all", action="store_true", help="Process every uncategorized offer")
@@ -369,7 +376,6 @@ def main() -> int:
                          "Ignored if --weekly is set.")
     args = ap.parse_args()
 
-    global MODEL_VERSION
     if args.weekly:
         iso_year, iso_week, _ = date.today().isocalendar()
         MODEL_VERSION = f"v1-{iso_year}-W{iso_week:02d}"
