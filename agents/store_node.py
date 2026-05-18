@@ -9,6 +9,7 @@ Edge Function auf und schreibt das Embedding in die Zeile.
 import logging
 from datetime import datetime, timezone
 
+import config
 from providers.supabase_client import get_supabase
 from workflow.state import AgentState, AnalyzedOffer
 
@@ -38,10 +39,19 @@ def store_node(state: AgentState) -> dict:
                 "url":              offer["url"],
                 "image_url":        offer.get("image_url"),
                 "price":            offer.get("price"),
+                "standard_price":   offer.get("standard_price"),
+                "loyalty_price":    offer.get("loyalty_price"),
                 "original_price":   offer.get("original_price"),
                 "discount_percent": offer.get("discount_percent"),
                 "store":            offer.get("store"),
                 "category":         offer.get("category"),
+                "requires_loyalty": bool(offer.get("requires_loyalty")),
+                "loyalty_program":  offer.get("loyalty_program"),
+                "price_condition_text": offer.get("price_condition_text"),
+                "validity_text":    offer.get("validity_text"),
+                "valid_from":       offer.get("valid_from"),
+                "valid_to":         offer.get("valid_to"),
+                "is_upcoming":      bool(offer.get("is_upcoming")),
                 "is_active":        True,
                 "last_seen_at":     now,
                 "scraped_at":       offer.get("scraped_at") or now,
@@ -61,6 +71,24 @@ def store_node(state: AgentState) -> dict:
             offer_id = rows[0]["id"]
             stored_ids.append(offer_id)
 
+            # Append price snapshot (append-only, never deduplicated — enables
+            # trend charts and rolling-percentile deal scoring in the dashboard).
+            try:
+                sb.table("price_history").insert({
+                    "offer_id":         offer_id,
+                    "external_id":      offer["external_id"],
+                    "price":            offer.get("price"),
+                    "loyalty_price":    offer.get("loyalty_price"),
+                    "original_price":   offer.get("original_price"),
+                    "discount_percent": offer.get("discount_percent"),
+                    "store":            offer.get("store"),
+                    "category":         offer.get("category"),
+                    "observed_at":      offer.get("scraped_at") or now,
+                }).execute()
+            except Exception as exc:
+                logger.warning("price_history insert failed for %s: %s",
+                               offer["external_id"], exc)
+
             # Analyse einfügen falls vorhanden
             analysis = analysis_map.get(offer["external_id"])
             if analysis:
@@ -75,7 +103,7 @@ def store_node(state: AgentState) -> dict:
                         "deal_verdict":     analysis.get("deal_verdict"),
                         "tags":             analysis.get("tags"),
                         "raw_llm_response": analysis.get("raw_llm_response"),
-                        "model_used":       "Qwen2.5-VL-32B-Instruct",
+                        "model_used":       config.VISION_MODEL,
                     },
                     on_conflict="offer_id",
                 ).execute()

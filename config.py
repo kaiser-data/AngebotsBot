@@ -6,15 +6,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# ─── Featherless / LLM ────────────────────────────────────────────────────────
-FEATHERLESS_API_KEY: str = os.environ["FEATHERLESS_API_KEY"]
-FEATHERLESS_BASE_URL: str = os.getenv("FEATHERLESS_BASE_URL", "https://api.featherless.ai/v1")
-VISION_MODEL: str = os.getenv("VISION_MODEL", "Qwen/Qwen2.5-VL-32B-Instruct")
-TEXT_MODEL: str = os.getenv("TEXT_MODEL", "") or VISION_MODEL  # fallback to vision model
+# ─── Google Gemini / LLM ──────────────────────────────────────────────────────
+GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
+GEMINI_BASE_URL: str = os.getenv(
+    "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
+)
+VISION_MODEL: str = os.getenv("VISION_MODEL", "gemini-2.5-flash")
+TEXT_MODEL: str = os.getenv("TEXT_MODEL", "") or "gemini-2.5-flash"
 
 # ─── Supabase ─────────────────────────────────────────────────────────────────
+# The Python bot ALWAYS uses the service_role key because it inserts/updates,
+# which the public-dashboard RLS policies forbid for the anon key (migration 007).
+# anon key stays available for any client-side use.
 SUPABASE_URL: str = os.environ["SUPABASE_URL"]
 SUPABASE_ANON_KEY: str = os.environ["SUPABASE_ANON_KEY"]
+SUPABASE_SERVICE_ROLE_KEY: str = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_ANON_KEY"]
+)
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.environ["TELEGRAM_BOT_TOKEN"]
