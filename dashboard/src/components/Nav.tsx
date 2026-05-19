@@ -11,9 +11,20 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { ThemeToggle } from "./ThemeToggle";
 import { WeekSelector } from "./WeekSelector";
+
+// WeekSelector reads useSearchParams(), so it must sit behind a Suspense
+// boundary — otherwise Next.js refuses to statically prerender any page
+// that includes the Nav (build fails with "missing-suspense-with-csr-bailout").
+function WeekSelectorBoundary() {
+  return (
+    <Suspense fallback={<div className="h-8 w-[220px]" aria-hidden />}>
+      <WeekSelector />
+    </Suspense>
+  );
+}
 
 const items: { href: string; label: string; icon: ReactNode }[] = [
   { href: "/", label: "Übersicht", icon: <Home className="h-4 w-4" /> },
@@ -73,7 +84,7 @@ export function Nav() {
             );
           })}
           <div className="ml-2">
-            <WeekSelector />
+            <WeekSelectorBoundary />
           </div>
           <div className="ml-1">
             <ThemeToggle />
@@ -126,7 +137,7 @@ export function Nav() {
                 );
               })}
               <div className="mt-2 border-t border-border pt-3">
-                <WeekSelector />
+                <WeekSelectorBoundary />
               </div>
             </div>
           </div>
