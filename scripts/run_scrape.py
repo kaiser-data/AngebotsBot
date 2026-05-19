@@ -128,9 +128,16 @@ async def main_async(args: argparse.Namespace) -> int:
             MODEL_VERSION,
         )
 
-        pending = fetch_uncategorized(limit=None, force=False, model_version=MODEL_VERSION)
+        pending = fetch_uncategorized(
+            limit=args.categorize_limit,
+            force=False,
+            model_version=MODEL_VERSION,
+        )
         if pending:
-            logger.info("Categorizing %d new offers…", len(pending))
+            logger.info(
+                "Categorizing %d new offers… (budget: %d/run)",
+                len(pending), args.categorize_limit,
+            )
             for i, batch in enumerate(chunks(pending, BATCH_SIZE), start=1):
                 try:
                     rows = classify_batch(batch, with_vision=False)
@@ -149,6 +156,9 @@ def main() -> int:
                     help="limit keywords (default: all A–Z keywords)")
     ap.add_argument("--categorize", action="store_true",
                     help="after scraping, run the LLM categorizer over new offers")
+    ap.add_argument("--categorize-limit", type=int, default=600,
+                    help="max offers to classify per run (default 600 — keeps daily "
+                         "runs under GitHub Actions' 60-min budget even with a backlog).")
     args = ap.parse_args()
     return asyncio.run(main_async(args))
 

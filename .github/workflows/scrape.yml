@@ -24,7 +24,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     env:
       # Server-side secrets — set in GitHub repo Settings → Secrets and variables → Actions
       SUPABASE_URL:                ${{ secrets.SUPABASE_URL }}

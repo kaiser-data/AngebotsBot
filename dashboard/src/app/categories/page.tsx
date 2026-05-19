@@ -287,19 +287,29 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
             ) : (
               <Card className="overflow-hidden">
                 <ul className="divide-y divide-border">
-                  {offers.map((o) => (
-                    <OfferRow
-                      key={o.id}
-                      title={o.title}
-                      store={o.store}
-                      url={o.url}
-                      imageUrl={o.image_url}
-                      price={o.price}
-                      originalPrice={o.original_price}
-                      discountPercent={o.discount_percent}
-                      meta={source === "heuristic" && !selectedSub ? o.category ?? undefined : undefined}
-                    />
-                  ))}
+                  {offers.map((o) => {
+                    // In heuristic mode we want to show OUR subcategory, not
+                    // the raw kaufDA tag (which is just the keyword the
+                    // scraper happened to find the offer under — kaufDA's
+                    // search frequently mis-returns offers across tags).
+                    const meta =
+                      source === "heuristic" && !selectedSub
+                        ? classify(o.title, o.category).subcategory
+                        : undefined;
+                    return (
+                      <OfferRow
+                        key={o.id}
+                        title={o.title}
+                        store={o.store}
+                        url={o.url}
+                        imageUrl={o.image_url}
+                        price={o.price}
+                        originalPrice={o.original_price}
+                        discountPercent={o.discount_percent}
+                        meta={meta}
+                      />
+                    );
+                  })}
                 </ul>
               </Card>
             )}
