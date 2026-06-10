@@ -77,8 +77,11 @@ function aggregate(rows: AggRow[]): Aggregates {
     subCounts.set(b, new Map());
   }
 
+  // Only trust the LLM source once it covers most offers — during the
+  // incremental backfill (600/day) partial coverage would otherwise collapse
+  // the bucket counts to just the categorized subset.
   const llmRows = rows.filter((r) => pickLLM(r));
-  if (llmRows.length > 0) {
+  if (llmRows.length >= rows.length * 0.5 && llmRows.length > 0) {
     for (const r of rows) {
       const llm = pickLLM(r);
       if (!llm || !BUCKETS.includes(llm.category as Bucket)) continue;
