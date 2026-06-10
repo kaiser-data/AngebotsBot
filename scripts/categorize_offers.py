@@ -359,11 +359,20 @@ async def _classify_batch_async(
     async with semaphore:
         llm = get_llm(temperature=0.0)
         user_msg = _build_user_message(batch, with_vision)
-        try:
-            response = await llm.ainvoke([SystemMessage(content=SYSTEM_PROMPT), user_msg])
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Batch failed (%d offers): %s", len(batch), exc)
-            return []
+        # Gemini intermittently sheds load with 503 "high demand" — one
+        # backoff retry recovers most of those batches within the same run.
+        response = None
+        for attempt in (1, 2):
+            try:
+                response = await llm.ainvoke([SystemMessage(content=SYSTEM_PROMPT), user_msg])
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 1:
+                    logger.warning("Batch attempt 1 failed (%d offers): %s — retrying", len(batch), exc)
+                    await asyncio.sleep(10)
+                else:
+                    logger.error("Batch failed (%d offers): %s", len(batch), exc)
+                    return []
         content = response.content if isinstance(response.content, str) else str(response.content)
         return _parse_results(content, batch)
 
