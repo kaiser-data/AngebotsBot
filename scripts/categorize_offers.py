@@ -230,11 +230,18 @@ def chunks(items: list[dict], n: int) -> Iterable[list[dict]]:
 
 
 def extract_json(text: str) -> dict:
-    """LLMs sometimes wrap JSON in ```json fences — strip them."""
+    """LLMs sometimes wrap JSON in ```json fences or add prose — extract the object."""
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.MULTILINE)
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Fall back to the outermost {...} span (prose before/after the JSON).
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(cleaned[start : end + 1])
+        raise
 
 
 def _build_user_message(batch: list[dict], with_vision: bool) -> HumanMessage:

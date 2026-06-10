@@ -76,7 +76,7 @@ def test_get_llm_builds_cached_chat_client(chat_openai_mock):
         openai_api_key=llm_provider.config.GEMINI_API_KEY,
         openai_api_base=llm_provider.config.GEMINI_BASE_URL,
         temperature=0.1,
-        max_tokens=4096,
+        max_tokens=16384,
     )
     assert first is client
     assert second is client
