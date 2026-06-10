@@ -17,8 +17,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -41,6 +43,12 @@ logger = logging.getLogger("categorize")
 # v2: introduced canonical subcategory taxonomy (mirror of dashboard/src/lib/taxonomy.ts).
 MODEL_VERSION = "v2"
 BATCH_SIZE = 25
+
+# Max concurrent LLM batch calls. Batches are independent, so we fan them out
+# with a semaphore (same pattern as agents/vision_node.py) instead of running
+# serially — this is what keeps the daily GitHub Actions run under its time
+# budget even with a backlog. Override with CATEGORIZE_CONCURRENCY.
+CONCURRENCY = int(os.getenv("CATEGORIZE_CONCURRENCY", "5"))
 
 # ── Canonical taxonomy ──
 # IMPORTANT: keep in sync with dashboard/src/lib/taxonomy.ts.
@@ -192,49 +200,26 @@ Regeln:
 
 
 def fetch_uncategorized(limit: int | None, force: bool, model_version: str) -> list[dict]:
-    """Return offers needing classification for this model_version."""
+    """Return offers needing classification for this model_version.
+
+    The diff (which active offers lack a row for this model_version) is computed
+    in Postgres via the fetch_uncategorized_offers RPC (migration 008) rather than
+    paging every offer + every category into Python. Results come back already
+    limited and newest-first.
+    """
     sb = get_supabase()
-
-    # Get every active offer's external_id + title (+ a couple of fields for context).
-    # We page through in chunks because PostgREST caps at ~1000 rows per request.
-    offers: list[dict] = []
-    page = 0
-    page_size = 1000
-    while True:
-        q = (
-            sb.table("offers")
-            .select("id, external_id, title, store, category, image_url")
-            .eq("is_active", True)
-            .range(page * page_size, (page + 1) * page_size - 1)
-        )
-        res = q.execute()
-        rows = res.data or []
-        offers.extend(rows)
-        if len(rows) < page_size:
-            break
-        page += 1
-
-    if force:
-        already_done: set[str] = set()
-    else:
-        # Fetch external_ids that already have a row for this model_version.
-        done_res = (
-            sb.table("llm_categories")
-            .select("external_id")
-            .eq("model_version", model_version)
-            .execute()
-        )
-        already_done = {r["external_id"] for r in (done_res.data or [])}
-
-    pending = [o for o in offers if o["external_id"] not in already_done]
-    if limit is not None:
-        pending = pending[:limit]
-
+    res = sb.rpc(
+        "fetch_uncategorized_offers",
+        {
+            "p_model_version": model_version,
+            "p_limit": limit,
+            "p_force": force,
+        },
+    ).execute()
+    pending = res.data or []
     logger.info(
-        "Offers: %d total, %d already classified, %d pending",
-        len(offers),
-        len(already_done),
-        len(pending),
+        "%d offers pending classification (model_version=%s, force=%s, limit=%s)",
+        len(pending), model_version, force, limit,
     )
     return pending
 
@@ -252,8 +237,8 @@ def extract_json(text: str) -> dict:
     return json.loads(cleaned)
 
 
-def classify_batch(batch: list[dict], with_vision: bool = False) -> list[dict]:
-    """Send one batch to the LLM and return parsed results.
+def _build_user_message(batch: list[dict], with_vision: bool) -> HumanMessage:
+    """Build the HumanMessage for one batch (text-only or multimodal).
 
     When with_vision=True, each offer's image_url is included as an image_url
     content part alongside the text payload. Gemini 2.5 Flash is multimodal and
@@ -271,27 +256,26 @@ def classify_batch(batch: list[dict], with_vision: bool = False) -> list[dict]:
     ]
     text_part = "Klassifiziere diese Angebote:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
-    if with_vision:
-        # Multipart content: text + one image_url per offer with an image.
-        # We label each image so the model can correlate it to the right item.
-        content_parts: list[dict] = [{"type": "text", "text": text_part}]
-        for o in batch:
-            url = (o.get("image_url") or "").strip()
-            if not url:
-                continue
-            content_parts.append({
-                "type": "text",
-                "text": f"\nProduktfoto für external_id={o['external_id']}:",
-            })
-            content_parts.append({"type": "image_url", "image_url": {"url": url}})
-        user_msg: object = HumanMessage(content=content_parts)
-    else:
-        user_msg = HumanMessage(content=text_part)
+    if not with_vision:
+        return HumanMessage(content=text_part)
 
-    llm = get_llm(temperature=0.0)
-    response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), user_msg])
-    content = response.content if isinstance(response.content, str) else str(response.content)
+    # Multipart content: text + one image_url per offer with an image.
+    # We label each image so the model can correlate it to the right item.
+    content_parts: list[dict] = [{"type": "text", "text": text_part}]
+    for o in batch:
+        url = (o.get("image_url") or "").strip()
+        if not url:
+            continue
+        content_parts.append({
+            "type": "text",
+            "text": f"\nProduktfoto für external_id={o['external_id']}:",
+        })
+        content_parts.append({"type": "image_url", "image_url": {"url": url}})
+    return HumanMessage(content=content_parts)
 
+
+def _parse_results(content: str, batch: list[dict]) -> list[dict]:
+    """Parse + validate one LLM response into upsert-ready llm_categories rows."""
     try:
         parsed = extract_json(content)
         results = parsed.get("results", [])
@@ -349,6 +333,64 @@ def classify_batch(batch: list[dict], with_vision: bool = False) -> list[dict]:
     return rows
 
 
+def classify_batch(batch: list[dict], with_vision: bool = False) -> list[dict]:
+    """Send one batch to the LLM synchronously and return parsed rows."""
+    llm = get_llm(temperature=0.0)
+    user_msg = _build_user_message(batch, with_vision)
+    response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), user_msg])
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    return _parse_results(content, batch)
+
+
+async def _classify_batch_async(
+    batch: list[dict],
+    with_vision: bool,
+    semaphore: asyncio.Semaphore,
+) -> list[dict]:
+    """Async single-batch classify, gated by a semaphore. Never raises —
+    a failed batch logs and yields no rows so the rest of the run continues."""
+    async with semaphore:
+        llm = get_llm(temperature=0.0)
+        user_msg = _build_user_message(batch, with_vision)
+        try:
+            response = await llm.ainvoke([SystemMessage(content=SYSTEM_PROMPT), user_msg])
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Batch failed (%d offers): %s", len(batch), exc)
+            return []
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        return _parse_results(content, batch)
+
+
+async def categorize_pending_async(
+    pending: list[dict],
+    with_vision: bool = False,
+    concurrency: int = CONCURRENCY,
+) -> int:
+    """Classify all pending offers with up to `concurrency` batches in flight.
+
+    LLM calls (the slow, I/O-bound part) are fanned out concurrently; the parsed
+    rows are then upserted sequentially via the sync Supabase client after the
+    gather, so we never block the event loop on DB writes.
+    """
+    if not pending:
+        return 0
+
+    semaphore = asyncio.Semaphore(concurrency)
+    batches = list(chunks(pending, BATCH_SIZE))
+    logger.info(
+        "Categorizing %d offers in %d batches (concurrency=%d)%s",
+        len(pending), len(batches), concurrency, " [vision]" if with_vision else "",
+    )
+
+    tasks = [_classify_batch_async(b, with_vision, semaphore) for b in batches]
+    results = await asyncio.gather(*tasks)
+
+    total_written = 0
+    for rows in results:
+        total_written += upsert_rows(rows)
+    return total_written
+
+
 def upsert_rows(rows: list[dict]) -> int:
     if not rows:
         return 0
@@ -389,22 +431,10 @@ def main() -> int:
         logger.info("Nothing to classify.")
         return 0
 
-    total_written = 0
-    total_batches = (len(pending) + BATCH_SIZE - 1) // BATCH_SIZE
     start = time.time()
-
-    for i, batch in enumerate(chunks(pending, BATCH_SIZE), start=1):
-        logger.info("Batch %d/%d: %d offers%s", i, total_batches, len(batch),
-                    " [vision]" if args.vision else "")
-        try:
-            rows = classify_batch(batch, with_vision=args.vision)
-            written = upsert_rows(rows)
-            total_written += written
-            logger.info("  → wrote %d rows", written)
-        except Exception as exc:
-            logger.error("Batch %d failed: %s", i, exc)
-            continue
-
+    total_written = asyncio.run(
+        categorize_pending_async(pending, with_vision=args.vision)
+    )
     elapsed = time.time() - start
     logger.info(
         "Done. %d / %d offers classified in %.1fs (model_version=%s)",

@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 
 from providers.supabase_client import get_supabase
@@ -31,7 +32,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_scrape")
 
-BATCH = 200
+BATCH = 50
+
+
+def _upsert_chunk(sb, chunk: list[dict], attempt: int = 0) -> list[dict]:
+    """Upsert one chunk of offer rows, surviving Postgres statement timeouts.
+
+    Supabase enforces a statement_timeout on the API role; when the table is
+    busy, a large multi-row upsert intermittently exceeds it (error 57014) and
+    used to kill the whole daily run before any row was written. Strategy:
+    retry once after a short pause, then split the chunk in half — halving
+    always converges to a statement that fits the budget.
+    """
+    try:
+        res = sb.table("offers").upsert(chunk, on_conflict="external_id").execute()
+        return res.data or []
+    except Exception as exc:  # noqa: BLE001 — postgrest APIError shape varies
+        if attempt == 0:
+            logger.warning("Upsert chunk of %d failed (%s) — retrying once", len(chunk), exc)
+            time.sleep(3)
+            return _upsert_chunk(sb, chunk, attempt=1)
+        if len(chunk) > 5:
+            logger.warning("Upsert chunk of %d failed again — splitting in half", len(chunk))
+            mid = len(chunk) // 2
+            return _upsert_chunk(sb, chunk[:mid]) + _upsert_chunk(sb, chunk[mid:])
+        raise
 
 
 def _iso_to_date(value):
@@ -73,15 +98,23 @@ def upsert_offers(offers: list[dict]) -> int:
         })
 
     inserted = 0
+    failed = 0
     for i in range(0, len(rows), BATCH):
         chunk = rows[i:i + BATCH]
-        res = sb.table("offers").upsert(chunk, on_conflict="external_id").execute()
+        try:
+            returned = _upsert_chunk(sb, chunk)
+        except Exception as exc:  # noqa: BLE001
+            # One bad chunk must not kill the run — the remaining offers still
+            # need their last_seen_at bumped or the dashboard culls them as stale.
+            logger.error("Giving up on chunk %d–%d: %s", i, i + len(chunk), exc)
+            failed += len(chunk)
+            continue
         inserted += len(chunk)
         # Append a price_history row per offer for the dashboard's deal score.
         # We need the offer_id from the upsert response since external_id isn't
         # the PK on price_history.
         history_rows = []
-        for r in (res.data or []):
+        for r in returned:
             history_rows.append({
                 "offer_id":         r["id"],
                 "external_id":      r["external_id"],
@@ -99,6 +132,8 @@ def upsert_offers(offers: list[dict]) -> int:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("price_history insert failed for chunk: %s", exc)
         logger.info("  upserted %d/%d", inserted, len(rows))
+    if failed:
+        logger.error("Failed to upsert %d/%d rows", failed, len(rows))
     return inserted
 
 
@@ -116,15 +151,15 @@ async def main_async(args: argparse.Namespace) -> int:
 
     upserted = upsert_offers(offers)
     logger.info("Upserted %d offers into Supabase", upserted)
+    if upserted == 0:
+        logger.error("Every upsert chunk failed — treating run as failed.")
+        return 1
 
     if args.categorize:
         # Lazy-import to keep the dry-run path light.
         from scripts.categorize_offers import (
             fetch_uncategorized,
-            classify_batch,
-            upsert_rows,
-            chunks,
-            BATCH_SIZE,
+            categorize_pending_async,
             MODEL_VERSION,
         )
 
@@ -138,12 +173,10 @@ async def main_async(args: argparse.Namespace) -> int:
                 "Categorizing %d new offers… (budget: %d/run)",
                 len(pending), args.categorize_limit,
             )
-            for i, batch in enumerate(chunks(pending, BATCH_SIZE), start=1):
-                try:
-                    rows = classify_batch(batch, with_vision=False)
-                    upsert_rows(rows)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Batch %d failed: %s", i, exc)
+            # Already inside the event loop — await directly rather than
+            # asyncio.run(), which would error on a running loop.
+            written = await categorize_pending_async(pending, with_vision=False)
+            logger.info("Categorized %d offers", written)
         else:
             logger.info("Nothing to categorize.")
 
