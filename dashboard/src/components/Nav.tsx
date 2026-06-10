@@ -2,7 +2,7 @@
 
 import {
   ChartLine,
-  Home,
+  Heart,
   Layers,
   Menu,
   MessageCircleQuestion,
@@ -27,7 +27,7 @@ function WeekSelectorBoundary() {
 }
 
 const items: { href: string; label: string; icon: ReactNode }[] = [
-  { href: "/", label: "Übersicht", icon: <Home className="h-4 w-4" /> },
+  { href: "/", label: "Für dich", icon: <Heart className="h-4 w-4" /> },
   { href: "/stores", label: "Märkte", icon: <Store className="h-4 w-4" /> },
   { href: "/categories", label: "Kategorien", icon: <Layers className="h-4 w-4" /> },
   { href: "/deals", label: "Deal score", icon: <ChartLine className="h-4 w-4" /> },
