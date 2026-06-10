@@ -262,7 +262,9 @@ export function ForYouFeed() {
           </h2>
           <span className="text-sm text-fg-muted">beste Rabatte zuerst</span>
         </div>
-        {loading && rows.length === 0 ? (
+        {loading ? (
+          // Also covers filter changes: never show rows from the previous
+          // store selection while the refetch is in flight.
           <FeedSkeleton />
         ) : mine.length === 0 ? (
           <EmptyState
@@ -303,7 +305,7 @@ export function ForYouFeed() {
         )}
       </section>
 
-      {prefs.bargainMinDiscount != null && bargains.length > 0 && (
+      {!loading && prefs.bargainMinDiscount != null && bargains.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-baseline justify-between">
             <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">

@@ -9,13 +9,16 @@ export const revalidate = 60;
 type SearchParams = Promise<{ offer?: string }>;
 
 async function getTopDeals() {
-  const { data } = await supabase
+  // The deal-score view aggregates price_history on the fly and takes
+  // multiple seconds — when it exceeds the API statement timeout we must
+  // show an error, not the misleading "no scores yet" empty state.
+  const { data, error } = await supabase
     .from("offer_deal_score")
     .select("offer_id, external_id, title, store, category, current_price, avg_price_90d, price_percentile, observation_count")
     .not("price_percentile", "is", null)
     .order("price_percentile", { ascending: true, nullsFirst: false })
     .limit(30);
-  return data ?? [];
+  return { deals: data ?? [], error: error?.message ?? null };
 }
 
 async function getOfferDetail(offerId: string) {
@@ -96,7 +99,7 @@ export default async function DealsPage({ searchParams }: { searchParams: Search
     );
   }
 
-  const deals = await getTopDeals();
+  const { deals, error } = await getTopDeals();
 
   return (
     <div className="space-y-8">
@@ -105,7 +108,13 @@ export default async function DealsPage({ searchParams }: { searchParams: Search
         subtitle="Angebote, die aktuell günstiger sind als der Schnitt der letzten 90 Tage. Niedrigeres Percentil = besseres Schnäppchen."
       />
 
-      {deals.length === 0 ? (
+      {error ? (
+        <EmptyState
+          icon={<TrendingDown className="h-8 w-8" />}
+          title="Deal-Scores konnten nicht geladen werden"
+          body="Die Auswertung hat zu lange gedauert. Lade die Seite in ein paar Sekunden neu."
+        />
+      ) : deals.length === 0 ? (
         <EmptyState
           icon={<TrendingDown className="h-8 w-8" />}
           title="Noch keine Deal-Scores"
