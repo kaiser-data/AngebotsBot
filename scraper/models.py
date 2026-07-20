@@ -17,7 +17,12 @@ class RawOffer(BaseModel):
     original_price: Optional[float] = None
     discount_percent: Optional[float] = None
     store: Optional[str] = None
+    # The kaufDA search keyword this offer was found under. Unreliable as a
+    # classification — kaufDA cross-returns offers across keywords.
     category: Optional[str] = None
+    # kaufDA's own taxonomy: top-level bucket and the full "A > B > C" path.
+    kaufda_category: Optional[str] = None
+    kaufda_category_path: Optional[str] = None
     source_viewer_url: Optional[str] = None
     source_page_number: Optional[int] = None
     source_page_image_url: Optional[str] = None
@@ -57,6 +62,8 @@ class RawOffer(BaseModel):
             "discount_percent": self.discount_percent,
             "store":           self.store,
             "category":        self.category,
+            "kaufda_category": self.kaufda_category,
+            "kaufda_category_path": self.kaufda_category_path,
             "source_viewer_url": self.source_viewer_url,
             "source_page_number": self.source_page_number,
             "source_page_image_url": self.source_page_image_url,

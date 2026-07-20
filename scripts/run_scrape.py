@@ -59,6 +59,28 @@ def _upsert_chunk(sb, chunk: list[dict], attempt: int = 0) -> list[dict]:
         raise
 
 
+def has_column(sb, table: str, column: str) -> bool:
+    """Does `table` expose `column` through PostgREST right now?
+
+    The taxonomy columns arrive with migration 010, which is applied by hand.
+    Writing them unconditionally would make every upsert fail with PGRST204
+    ("column not found in the schema cache") wherever that migration hasn't run
+    yet — killing the nightly scrape. Probing once per run keeps the two
+    independent: the columns start being populated on their own once the
+    migration lands, with no code change or redeploy.
+    """
+    try:
+        sb.table(table).select(column).limit(1).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001 — postgrest APIError shape varies
+        logger.warning(
+            "Column %s.%s unavailable (%s) — skipping it this run. "
+            "Apply supabase/migrations/010_kaufda_taxonomy.sql to enable it.",
+            table, column, exc,
+        )
+        return False
+
+
 def _iso_to_date(value):
     if not value:
         return None
@@ -71,9 +93,10 @@ def _iso_to_date(value):
 def upsert_offers(offers: list[dict]) -> int:
     sb = get_supabase()
     now = datetime.now(timezone.utc).isoformat()
+    write_taxonomy = has_column(sb, "offers", "kaufda_category")
     rows: list[dict] = []
     for offer in offers:
-        rows.append({
+        row = {
             "external_id":      offer["external_id"],
             "title":            offer["title"],
             "url":              offer["url"],
@@ -95,7 +118,11 @@ def upsert_offers(offers: list[dict]) -> int:
             "is_active":        True,
             "last_seen_at":     now,
             "scraped_at":       offer.get("scraped_at") or now,
-        })
+        }
+        if write_taxonomy:
+            row["kaufda_category"] = offer.get("kaufda_category")
+            row["kaufda_category_path"] = offer.get("kaufda_category_path")
+        rows.append(row)
 
     inserted = 0
     failed = 0

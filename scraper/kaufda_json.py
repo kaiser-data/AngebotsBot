@@ -110,6 +110,30 @@ def _classify_loyalty(conditions: list[dict]) -> tuple[bool, Optional[str], Opti
     return requires, program, " · ".join(free_text_parts) or None
 
 
+def _extract_taxonomy(item: dict) -> tuple[Optional[str], Optional[str]]:
+    """Pull kaufDA's own category tree off an offer.
+
+    `categoryPaths` is a list of paths, each a list of {"id", "name"} nodes
+    ordered root → leaf. kaufDA often gives two paths: a brand-oriented one
+    ("Marken Möbel und Wohnen") and a product-oriented one ("Möbel und Wohnen
+    → … → Ecksofa"). We prefer the longest path, which is reliably the
+    product one, and return (top_level_name, "A > B > C").
+    """
+    paths = item.get("categoryPaths") or []
+    best: list[dict] = []
+    for path in paths:
+        if isinstance(path, list) and len(path) > len(best):
+            if all(isinstance(node, dict) for node in path):
+                best = path
+    if not best:
+        return None, None
+
+    names = [str(n.get("name")).strip() for n in best if n.get("name")]
+    if not names:
+        return None, None
+    return names[0], " > ".join(names)
+
+
 def _build_viewer_url(brochure_id: str, page_number: Optional[int]) -> str:
     page = (page_number or 0) + 1  # kaufda uses 1-indexed viewer pages
     return (
@@ -118,12 +142,38 @@ def _build_viewer_url(brochure_id: str, page_number: Optional[int]) -> str:
     )
 
 
-def _compute_discount(main_price: Optional[float], secondary_price: Optional[float]) -> Optional[float]:
+# Above this, a "discount" is almost never a genuine markdown on the same
+# article — it is a financing rate (€1 phone "with contract"), an accessory
+# priced against the headline product (a €40 cushion vs a €3147 sofa), or an
+# "ab €X" range floor compared to a top-of-range price. kaufDA's own price
+# fields let us catch most of these before they reach the dashboard.
+IMPLAUSIBLE_DISCOUNT_PCT = 90.0
+
+
+def _compute_discount(
+    main_price: Optional[float],
+    secondary_price: Optional[float],
+    *,
+    is_price_range: bool = False,
+) -> Optional[float]:
+    """Percentage off, or None when the two prices can't be trusted as a pair.
+
+    `is_price_range` is kaufDA's `prices.priceRange` flag: the main price is an
+    "ab €X" starting point for a family of variants, so the strikethrough price
+    belongs to a different (pricier) variant and the delta is not a real
+    discount. We also drop anything at or above IMPLAUSIBLE_DISCOUNT_PCT, which
+    in practice is contract/financing pricing rather than a markdown.
+    """
     if not main_price or not secondary_price:
         return None
     if secondary_price <= main_price:
         return None
-    return round((secondary_price - main_price) / secondary_price * 100, 1)
+    if is_price_range:
+        return None
+    pct = round((secondary_price - main_price) / secondary_price * 100, 1)
+    if pct >= IMPLAUSIBLE_DISCOUNT_PCT:
+        return None
+    return pct
 
 
 def _item_to_raw_offer(item: dict, keyword: str) -> Optional[RawOffer]:
@@ -157,7 +207,9 @@ def _item_to_raw_offer(item: dict, keyword: str) -> Optional[RawOffer]:
         loyalty_price = main_price if requires_loyalty else None
         standard_price = original_price or main_price
 
-        discount = _compute_discount(main_price, secondary_price)
+        discount = _compute_discount(
+            main_price, secondary_price, is_price_range=bool(prices.get("priceRange"))
+        )
 
         valid_from = _to_iso(item.get("validFrom"))
         valid_to = _to_iso(item.get("validUntil"))
@@ -173,6 +225,8 @@ def _item_to_raw_offer(item: dict, keyword: str) -> Optional[RawOffer]:
         else:
             display_title = title
 
+        kaufda_category, kaufda_category_path = _extract_taxonomy(item)
+
         return RawOffer(
             external_id=str(offer_id),
             title=display_title,
@@ -185,6 +239,8 @@ def _item_to_raw_offer(item: dict, keyword: str) -> Optional[RawOffer]:
             discount_percent=discount,
             store=item.get("publisherName"),
             category=keyword,
+            kaufda_category=kaufda_category,
+            kaufda_category_path=kaufda_category_path,
             source_viewer_url=viewer_url,
             source_page_number=(page_no_zero + 1) if isinstance(page_no_zero, int) else None,
             source_page_image_url=None,
