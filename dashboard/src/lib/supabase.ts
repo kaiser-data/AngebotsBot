@@ -62,6 +62,84 @@ export function excludeStale<Q>(q: Q): Q {
   return builder.gte("last_seen_at", freshnessThresholdIso()) as unknown as Q;
 }
 
+/**
+ * PostgREST caps every response at 1000 rows (`max-rows`), regardless of what
+ * `.limit()` asks for — so `.limit(20000)` silently returns the first 1000 and
+ * the caller believes it saw everything. Page through with `.range()` instead.
+ *
+ * Pages go out in parallel batches rather than one at a time: the whole ~6k-row
+ * working set comes back in well under a second that way, versus several
+ * seconds sequentially.
+ */
+export const PAGE_SIZE = 1000;
+const BATCH = 8;
+const MAX_PAGES = 24;
+
+type Page<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
+
+export async function fetchAllRows<T>(
+  page: (from: number, to: number) => Page<T>,
+): Promise<{ rows: T[]; error: string | null; truncated: boolean }> {
+  const rows: T[] = [];
+
+  for (let start = 0; start < MAX_PAGES; start += BATCH) {
+    const batch = Array.from({ length: Math.min(BATCH, MAX_PAGES - start) }, (_, i) => {
+      const from = (start + i) * PAGE_SIZE;
+      return page(from, from + PAGE_SIZE - 1);
+    });
+
+    const settled = await Promise.all(batch);
+
+    // Surface the failure instead of returning a short list, which reads
+    // downstream as "there are only N offers" — that is what rendered zeros.
+    const failed = settled.find((r) => r.error);
+    if (failed) return { rows, error: failed.error!.message, truncated: false };
+
+    for (const { data } of settled) if (data?.length) rows.push(...data);
+
+    // A short page means we reached the end of the result set.
+    if (settled.some(({ data }) => (data?.length ?? 0) < PAGE_SIZE)) {
+      return { rows, error: null, truncated: false };
+    }
+  }
+
+  return { rows, error: null, truncated: true };
+}
+
+/**
+ * Is `column` present on `table` right now?
+ *
+ * The kaufDA taxonomy columns arrive with migration 010, which is applied by
+ * hand. Selecting them before that exists fails the whole query with 42703
+ * ("column does not exist") and takes the page down. Probing lets the
+ * dashboard run against both schema versions and pick the richer one up
+ * automatically once the migration lands.
+ *
+ * Memoized per process: a negative result is re-checked after RETRY_MS so a
+ * freshly-applied migration is noticed without a redeploy; a positive result
+ * is cached for the process lifetime (columns don't disappear).
+ */
+const RETRY_MS = 60_000;
+const columnProbes = new Map<string, { at: number; present: Promise<boolean> }>();
+
+export function hasColumn(table: string, column: string): Promise<boolean> {
+  const key = `${table}.${column}`;
+  const cached = columnProbes.get(key);
+  if (cached && Date.now() - cached.at < RETRY_MS) return cached.present;
+
+  const present = Promise.resolve(supabase.from(table).select(column).limit(1)).then(
+    ({ error }) => !error,
+    () => false,
+  );
+
+  columnProbes.set(key, { at: Date.now(), present });
+  // Keep a confirmed-present result cached indefinitely.
+  void present.then((ok: boolean) => {
+    if (ok) columnProbes.set(key, { at: Number.MAX_SAFE_INTEGER, present });
+  });
+  return present;
+}
+
 export type Offer = {
   id: string;
   external_id: string;

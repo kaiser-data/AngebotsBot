@@ -16,7 +16,15 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Card, EmptyState, OfferRow, PageHeader } from "@/components/ui";
 import { classify } from "@/lib/categoryHeuristic";
-import { applyWeekFilter, excludeExpired, excludeStale, supabase } from "@/lib/supabase";
+import { bucketFromKaufda } from "@/lib/kaufdaTaxonomy";
+import {
+  applyWeekFilter,
+  excludeExpired,
+  excludeStale,
+  fetchAllRows,
+  hasColumn,
+  supabase,
+} from "@/lib/supabase";
 import { BUCKETS, SUBCATEGORIES, type Bucket } from "@/lib/taxonomy";
 import { parseWeek, weekRange, type WeekRange } from "@/lib/week";
 
@@ -37,30 +45,84 @@ const ICONS: Record<Bucket, ReactNode> = {
   "Sonstiges": <Package className="h-4 w-4" />,
 };
 
-type Source = "llm" | "heuristic";
+type Source = "kaufda" | "heuristic";
+
+type LLMCategory = { category: string; subcategory: string | null };
 
 type AggRow = {
+  id: string;
   title: string | null;
   category: string | null;
-  llm_categories:
-    | { category: string; subcategory: string | null }[]
-    | { category: string; subcategory: string | null }
-    | null;
+  kaufda_category: string | null;
+  kaufda_category_path: string | null;
 };
 
-/** Fetch every active offer with its title, raw kaufda category, and LLM classification. */
-async function fetchOffers(week: WeekRange | null): Promise<AggRow[]> {
-  let q = supabase
-    .from("offers")
-    .select("id, title, category, llm_categories:offer_latest_category(category, subcategory)")
-    .eq("is_active", true);
-  q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
-  const { data } = await q.limit(20000);
-  return (data ?? []) as AggRow[];
+const BASE_FIELDS = "id, title, category";
+const TAXONOMY_FIELDS = "kaufda_category, kaufda_category_path";
+
+/**
+ * Field list for the offers query, including kaufDA's taxonomy columns only
+ * once migration 010 has added them — selecting a missing column fails the
+ * whole request with 42703 and blanks the page.
+ */
+async function offerFields(extra = ""): Promise<string> {
+  const withTaxonomy = await hasColumn("offers", "kaufda_category");
+  return [BASE_FIELDS, withTaxonomy ? TAXONOMY_FIELDS : "", extra]
+    .filter(Boolean)
+    .join(", ");
 }
 
-function pickLLM(row: AggRow) {
-  return Array.isArray(row.llm_categories) ? row.llm_categories[0] : row.llm_categories;
+/**
+ * Bucket for one offer, best source first:
+ *   1. kaufDA's own taxonomy (~95% coverage, most reliable)
+ *   2. the LLM classification, where one exists
+ *   3. the title heuristic
+ */
+function bucketFor(row: AggRow, llm: Map<string, LLMCategory>): Bucket {
+  const fromKaufda = bucketFromKaufda(row.kaufda_category, row.kaufda_category_path);
+  if (fromKaufda) return fromKaufda;
+  const fromLLM = llm.get(row.id)?.category;
+  if (fromLLM && (BUCKETS as readonly string[]).includes(fromLLM)) return fromLLM as Bucket;
+  return classify(row.title, row.category).bucket;
+}
+
+/**
+ * Fetch every active offer for the week, plus the LLM classifications, as two
+ * independent queries.
+ *
+ * They used to be a single query with an embedded
+ * `offer_latest_category(...)` join. At the current table size that join makes
+ * Postgres exceed the API statement timeout and the request dies with 57014 —
+ * which this page then rendered as "0 Angebote" in every bucket. Fetched
+ * apart, both are fast.
+ */
+async function fetchOffers(
+  week: WeekRange | null,
+): Promise<{ rows: AggRow[]; llm: Map<string, LLMCategory>; error: string | null }> {
+  const fields = await offerFields();
+  const [offers, categories] = await Promise.all([
+    fetchAllRows<AggRow>((from, to) => {
+      let q = supabase.from("offers").select(fields).eq("is_active", true);
+      q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
+      // `fields` is built at runtime, so supabase-js can't infer the row shape.
+      return q.range(from, to).returns<AggRow[]>();
+    }),
+    fetchAllRows<{ offer_id: string | null } & LLMCategory>((from, to) =>
+      supabase
+        .from("offer_latest_category")
+        .select("offer_id, category, subcategory")
+        .range(from, to),
+    ),
+  ]);
+
+  const llm = new Map<string, LLMCategory>();
+  for (const c of categories.rows) {
+    if (c.offer_id) llm.set(c.offer_id, { category: c.category, subcategory: c.subcategory });
+  }
+
+  // Losing the LLM categories is survivable — the heuristic covers it.
+  // Losing the offers themselves is not.
+  return { rows: offers.rows, llm, error: offers.error };
 }
 
 type Aggregates = {
@@ -69,7 +131,14 @@ type Aggregates = {
   subCounts: Map<Bucket, Map<string, number>>;
 };
 
-function aggregate(rows: AggRow[]): Aggregates {
+/** Subcategory for an offer — the LLM's when valid for the bucket, else the heuristic's. */
+function subcategoryFor(row: AggRow, bucket: Bucket, llm: Map<string, LLMCategory>): string {
+  const fromLLM = (llm.get(row.id)?.subcategory ?? "").trim();
+  if (fromLLM && (SUBCATEGORIES[bucket] as readonly string[]).includes(fromLLM)) return fromLLM;
+  return classify(row.title, row.category).subcategory;
+}
+
+function aggregate(rows: AggRow[], llmByOffer: Map<string, LLMCategory>): Aggregates {
   const bucketCounts = new Map<Bucket, number>();
   const subCounts = new Map<Bucket, Map<string, number>>();
   for (const b of BUCKETS) {
@@ -77,78 +146,79 @@ function aggregate(rows: AggRow[]): Aggregates {
     subCounts.set(b, new Map());
   }
 
-  // Only trust the LLM source once it covers most offers — during the
-  // incremental backfill (600/day) partial coverage would otherwise collapse
-  // the bucket counts to just the categorized subset.
-  const llmRows = rows.filter((r) => pickLLM(r));
-  if (llmRows.length >= rows.length * 0.5 && llmRows.length > 0) {
-    for (const r of rows) {
-      const llm = pickLLM(r);
-      if (!llm || !BUCKETS.includes(llm.category as Bucket)) continue;
-      const b = llm.category as Bucket;
-      bucketCounts.set(b, (bucketCounts.get(b) ?? 0) + 1);
-      const sub = (llm.subcategory ?? "").trim();
-      if (sub && (SUBCATEGORIES[b] as readonly string[]).includes(sub)) {
-        const m = subCounts.get(b)!;
-        m.set(sub, (m.get(sub) ?? 0) + 1);
-      }
-    }
-    return { source: "llm", bucketCounts, subCounts };
-  }
-
   for (const r of rows) {
-    if (!r.title && !r.category) continue;
-    const { bucket, subcategory } = classify(r.title, r.category);
+    if (!r.title && !r.category && !r.kaufda_category) continue;
+    const bucket = bucketFor(r, llmByOffer);
     bucketCounts.set(bucket, (bucketCounts.get(bucket) ?? 0) + 1);
     const m = subCounts.get(bucket)!;
-    m.set(subcategory, (m.get(subcategory) ?? 0) + 1);
+    const sub = subcategoryFor(r, bucket, llmByOffer);
+    m.set(sub, (m.get(sub) ?? 0) + 1);
   }
-  return { source: "heuristic", bucketCounts, subCounts };
+
+  // Which source actually drove the bucket assignments — shown to the user so
+  // a fallback classification isn't mistaken for kaufDA's own taxonomy.
+  const fromKaufda = rows.filter((r) =>
+    bucketFromKaufda(r.kaufda_category, r.kaufda_category_path),
+  ).length;
+  const source: Source =
+    fromKaufda >= rows.length * 0.5 && fromKaufda > 0 ? "kaufda" : "heuristic";
+
+  return { source, bucketCounts, subCounts };
 }
 
-async function fetchLLMOffersInBucket(cat: Bucket, sub: string | null, week: WeekRange | null) {
-  let q = supabase.from("offer_latest_category").select("offer_id").eq("category", cat);
-  if (sub) q = q.eq("subcategory", sub);
-  const { data: mapped } = await q;
-  const ids = (mapped ?? []).map((r) => r.offer_id).filter(Boolean) as string[];
-  if (!ids.length) return [];
-  let oq = supabase
-    .from("offers")
-    .select("id, title, store, price, original_price, discount_percent, image_url, url, category")
-    .in("id", ids)
-    .eq("is_active", true);
-  oq = applyWeekFilter(excludeExpired(excludeStale(oq)), week);
-  const { data } = await oq
-    .order("discount_percent", { ascending: false, nullsFirst: false })
-    .limit(60);
-  return data ?? [];
-}
+type OfferRowData = AggRow & {
+  store: string | null;
+  price: number | null;
+  original_price: number | null;
+  discount_percent: number | null;
+  image_url: string | null;
+  url: string;
+};
 
-async function fetchHeuristicOffersInBucket(cat: Bucket, sub: string | null, week: WeekRange | null) {
-  let q = supabase
-    .from("offers")
-    .select("id, title, store, price, original_price, discount_percent, image_url, url, category")
-    .eq("is_active", true);
-  q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
-  const { data } = await q
-    .order("discount_percent", { ascending: false, nullsFirst: false })
-    .limit(2000);
-  return (data ?? [])
+const DETAIL_EXTRA = "store, price, original_price, discount_percent, image_url, url";
+
+const MAX_OFFERS_SHOWN = 60;
+
+/**
+ * Offers inside one bucket (optionally one subcategory).
+ *
+ * Bucketing happens in JS — it draws on kaufDA's taxonomy, the LLM table and
+ * the title heuristic — so the filter cannot be pushed into SQL and every
+ * candidate row has to come back. `.limit(2000)` used to look like it did that,
+ * but PostgREST caps responses at 1000, so lower-discount offers in a bucket
+ * silently never appeared.
+ */
+async function fetchOffersInBucket(
+  cat: Bucket,
+  sub: string | null,
+  week: WeekRange | null,
+  llm: Map<string, LLMCategory>,
+) {
+  const fields = await offerFields(DETAIL_EXTRA);
+  const { rows } = await fetchAllRows<OfferRowData>((from, to) => {
+    let q = supabase.from("offers").select(fields).eq("is_active", true);
+    q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
+    return q
+      .order("discount_percent", { ascending: false, nullsFirst: false })
+      .range(from, to)
+      .returns<OfferRowData[]>();
+  });
+
+  return rows
     .filter((o) => {
-      const c = classify(o.title, o.category);
-      if (c.bucket !== cat) return false;
-      if (sub && c.subcategory !== sub) return false;
+      if (bucketFor(o, llm) !== cat) return false;
+      if (sub && subcategoryFor(o, cat, llm) !== sub) return false;
       return true;
     })
-    .slice(0, 60);
+    .slice(0, MAX_OFFERS_SHOWN);
 }
 
 export default async function CategoriesPage({ searchParams }: { searchParams: SearchParams }) {
   const { cat = "", sub = "", week: weekParam } = await searchParams;
   const week = weekRange(parseWeek(weekParam));
 
-  const rows = await fetchOffers(week);
-  const { source, bucketCounts, subCounts } = aggregate(rows);
+  const { rows, llm, error } = await fetchOffers(week);
+  const { source, bucketCounts, subCounts } = aggregate(rows, llm);
 
   const selected = (BUCKETS as readonly string[]).includes(cat) ? (cat as Bucket) : "";
   const selectedSub =
@@ -156,11 +226,7 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
       ? sub
       : null;
 
-  const offers = selected
-    ? source === "llm"
-      ? await fetchLLMOffersInBucket(selected, selectedSub, week)
-      : await fetchHeuristicOffersInBucket(selected, selectedSub, week)
-    : [];
+  const offers = selected ? await fetchOffersInBucket(selected, selectedSub, week, llm) : [];
 
   return (
     <div className="space-y-8">
@@ -173,22 +239,37 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
         }
       />
 
-      {source === "heuristic" && (
+      {error && (
+        <EmptyState
+          icon={<Layers className="h-8 w-8" />}
+          title="Angebote konnten nicht geladen werden"
+          body={
+            <>
+              Die Datenbank hat die Abfrage abgebrochen. Das ist ein Ladefehler — es heißt
+              nicht, dass es keine Angebote gibt. Lade die Seite in ein paar Sekunden neu.
+            </>
+          }
+        />
+      )}
+
+      {!error && source === "heuristic" && (
         <div className="flex items-start gap-3 rounded-lg border border-border bg-surface p-4 text-sm">
           <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-fg-subtle" />
           <div className="space-y-1">
             <div className="font-medium">Heuristische Klassifikation</div>
             <p className="text-fg-muted">
-              Schlüsselwort-basiert auf den rohen kaufDA-Kategorien. Für saubere LLM-Klassifikation:
+              Diese Angebote tragen noch keine kaufDA-Kategorie, daher wird aus dem Titel
+              geraten. Die echte Kategorie kommt automatisch mit dem nächsten Scrape — sofern
+              die Migration angewandt ist:
             </p>
             <code className="mt-1 inline-block rounded bg-surface-hover px-2 py-1 text-xs">
-              python -m scripts.categorize_offers --all --force
+              supabase/migrations/010_kaufda_taxonomy.sql
             </code>
           </div>
         </div>
       )}
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <section className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-5 ${error ? "hidden" : ""}`}>
         {BUCKETS.map((b) => {
           const n = bucketCounts.get(b) ?? 0;
           const active = b === selected;
@@ -291,18 +372,14 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
               <Card className="overflow-hidden">
                 <ul className="divide-y divide-border">
                   {offers.map((o) => {
-                    // In heuristic mode we want to show OUR subcategory, not
-                    // the raw kaufDA tag (which is just the keyword the
-                    // scraper happened to find the offer under — kaufDA's
-                    // search frequently mis-returns offers across tags).
-                    const meta =
-                      source === "heuristic" && !selectedSub
-                        ? classify(o.title, o.category).subcategory
-                        : undefined;
+                    // Show OUR subcategory, never the raw `category` column —
+                    // that is just the keyword the scraper found the offer
+                    // under, and kaufDA's search cross-returns across keywords.
+                    const meta = selectedSub ? undefined : subcategoryFor(o, selected, llm);
                     return (
                       <OfferRow
                         key={o.id}
-                        title={o.title}
+                        title={o.title ?? "(ohne Titel)"}
                         store={o.store}
                         url={o.url}
                         imageUrl={o.image_url}
