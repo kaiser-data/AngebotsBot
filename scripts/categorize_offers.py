@@ -32,6 +32,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import config
 from providers.llm import get_llm
 from providers.supabase_client import get_supabase
+from scripts.taxonomy import (
+    taxonomy_buckets,
+    taxonomy_fallback,
+    taxonomy_subcategories,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +45,7 @@ logging.basicConfig(
 logger = logging.getLogger("categorize")
 
 # Bump this string to force re-classification of everything.
-# v2: introduced canonical subcategory taxonomy (mirror of dashboard/src/lib/taxonomy.ts).
+# v2: introduced canonical subcategory taxonomy (dashboard/src/lib/taxonomy.json).
 MODEL_VERSION = "v2"
 BATCH_SIZE = 25
 
@@ -50,94 +55,46 @@ BATCH_SIZE = 25
 # budget even with a backlog. Override with CATEGORIZE_CONCURRENCY.
 CONCURRENCY = int(os.getenv("CATEGORIZE_CONCURRENCY", "5"))
 
-# ── Canonical taxonomy ──
-# IMPORTANT: keep in sync with dashboard/src/lib/taxonomy.ts.
-# If you change anything here, mirror it there and bump MODEL_VERSION.
-TAXONOMY: list[str] = [
-    "Lebensmittel",
-    "Getränke",
-    "Drogerie & Kosmetik",
-    "Haushalt & Reinigung",
-    "Baby & Kind",
-    "Tier",
-    "Garten & Heimwerken",
-    "Elektronik & Multimedia",
-    "Mode, Sport & Freizeit",
-    "Sonstiges",
-]
-
-SUBCATEGORIES: dict[str, list[str]] = {
-    "Lebensmittel": [
-        "Obst & Gemüse", "Fleisch & Wurst", "Fisch", "Milchprodukte & Käse",
-        "Brot & Backwaren", "Süßwaren & Snacks", "Tiefkühl", "Grundnahrung & Konserven",
-    ],
-    "Getränke": [
-        "Wasser & Säfte", "Bier", "Wein & Sekt", "Spirituosen", "Kaffee & Tee",
-    ],
-    "Drogerie & Kosmetik": [
-        "Körperpflege", "Kosmetik & Make-up", "Gesundheit & Apotheke", "Parfum & Düfte",
-    ],
-    "Haushalt & Reinigung": [
-        "Waschmittel", "Reinigung", "Küchenbedarf", "Aufbewahrung",
-    ],
-    "Baby & Kind": [
-        "Windeln & Pflege", "Baby-Nahrung", "Spielzeug",
-    ],
-    "Tier": [
-        "Hund", "Katze", "Sonstige Tiere",
-    ],
-    "Garten & Heimwerken": [
-        "Pflanzen & Garten", "Gartenwerkzeug", "Werkzeug & Heimwerken",
-        "Farbe & Bauchemie", "Gartenmöbel",
-    ],
-    "Elektronik & Multimedia": [
-        "Smartphone & Tablet", "Computer & Drucker", "TV & Audio",
-        "Haushaltsgeräte", "Sonstige Elektronik",
-    ],
-    "Mode, Sport & Freizeit": [
-        "Kleidung & Schuhe", "Sport & Fitness", "Outdoor", "Spielzeug & Hobby",
-    ],
-    "Sonstiges": [
-        "Auto & Mobilität", "Büro & Schreibwaren", "Sonstige",
-    ],
-}
+# Loaded from dashboard/src/lib/taxonomy.json — edit that file, not these lists.
+TAXONOMY: list[str] = taxonomy_buckets()
+SUBCATEGORIES: dict[str, list[str]] = taxonomy_subcategories()
 
 # Few-shot examples teach the model:
 #   - kaufDA's `category` column is a noisy keyword hint, NOT ground truth
-#   - brand/product disambiguation (Apple Inc. ≠ Apfel, "Ariel" = detergent, "Funny-Frisch" = chips)
-#   - normalized subcategory vocabulary (short, capitalised, German)
+#   - brand/product disambiguation (Apple Inc. ≠ Apfel, "Ariel" = detergent)
+#   - subcategory labels MUST be from the canonical taxonomy only
 FEW_SHOT_EXAMPLES = [
     {"title": "Ariel Universal Waschpulver 80 WL",
      "store": "REWE", "kaufda_category": "Ariel",
-     "expected": {"category": "Drogerie & Kosmetik", "subcategory": "Waschmittel",
+     "expected": {"category": "Haushalt & Reinigung", "subcategory": "Waschmittel",
                   "confidence": 0.98, "reasoning": "Markenname Ariel = Waschmittel"}},
     {"title": "Apple iPhone 15 128GB",
      "store": "Saturn", "kaufda_category": "Apple",
-     "expected": {"category": "Elektronik & Multimedia", "subcategory": "Smartphone",
+     "expected": {"category": "Elektronik & Multimedia", "subcategory": "Smartphone & Tablet",
                   "confidence": 0.99, "reasoning": "Apple-Marke, nicht Frucht"}},
     {"title": "Funny-Frisch Chipsfrisch ungarisch 175g",
      "store": "Edeka", "kaufda_category": "Funny-Frisch",
-     "expected": {"category": "Lebensmittel", "subcategory": "Chips",
+     "expected": {"category": "Lebensmittel", "subcategory": "Süßwaren & Snacks",
                   "confidence": 0.97, "reasoning": "Chips-Marke"}},
     {"title": "Apfel Elstar lose, 1 kg",
      "store": "REWE", "kaufda_category": "Apfel",
-     "expected": {"category": "Lebensmittel", "subcategory": "Apfel",
+     "expected": {"category": "Lebensmittel", "subcategory": "Obst & Gemüse",
                   "confidence": 0.99, "reasoning": "Frisches Obst"}},
     {"title": "Felix Knabberminis Huhn 200g",
      "store": "Fressnapf", "kaufda_category": "Felix",
-     "expected": {"category": "Tier", "subcategory": "Katzenfutter",
+     "expected": {"category": "Tier", "subcategory": "Katze",
                   "confidence": 0.98, "reasoning": "Felix ist Katzenfutter-Marke"}},
     {"title": "Aperol Aperitivo 11% 0,7l",
      "store": "Kaufland", "kaufda_category": "Aperol",
-     "expected": {"category": "Getränke", "subcategory": "Aperitif",
+     "expected": {"category": "Getränke", "subcategory": "Spirituosen",
                   "confidence": 0.99, "reasoning": "Alkohol-Aperitif"}},
     {"title": "Akku-Rasenmäher Bosch 36V",
      "store": "OBI", "kaufda_category": "Akku-Rasenmaeher",
-     "expected": {"category": "Garten & Heimwerken", "subcategory": "Rasenmäher",
+     "expected": {"category": "Garten & Heimwerken", "subcategory": "Gartenwerkzeug",
                   "confidence": 0.98, "reasoning": "Gartengerät"}},
     {"title": "Pampers Premium Protection Größe 4",
      "store": "dm", "kaufda_category": "Babywindeln",
-     "expected": {"category": "Baby & Kind", "subcategory": "Windeln",
+     "expected": {"category": "Baby & Kind", "subcategory": "Windeln & Pflege",
                   "confidence": 0.99, "reasoning": "Babywindeln"}},
 ]
 
@@ -308,20 +265,7 @@ def _parse_results(content: str, batch: list[dict]) -> list[dict]:
         if raw_sub in allowed:
             sub = raw_sub
         else:
-            # Generic fallbacks per bucket.
-            fallback = {
-                "Lebensmittel": "Grundnahrung & Konserven",
-                "Getränke": "Wasser & Säfte",
-                "Drogerie & Kosmetik": "Körperpflege",
-                "Haushalt & Reinigung": "Reinigung",
-                "Baby & Kind": "Spielzeug",
-                "Tier": "Sonstige Tiere",
-                "Garten & Heimwerken": "Werkzeug & Heimwerken",
-                "Elektronik & Multimedia": "Sonstige Elektronik",
-                "Mode, Sport & Freizeit": "Kleidung & Schuhe",
-                "Sonstiges": "Sonstige",
-            }.get(cat, "Sonstige")
-            sub = fallback
+            sub = taxonomy_fallback(cat)
             coerced += 1
             logger.debug("Coerced subcategory %r → %r for bucket %r", raw_sub, sub, cat)
 
