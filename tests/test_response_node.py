@@ -36,8 +36,8 @@ def test_response_node_scrape_success_with_error_counts():
 
     out = result["final_response"]
     assert "**Scraping abgeschlossen!**" in out
-    assert "Neue Angebote gefunden: **3**" in out
-    assert "Davon analysiert (Vision KI): **1**" in out
+    assert "Angebote gefunden: **3**" in out
+    assert "Vision-Analysen: **1**" in out
     assert "In Datenbank gespeichert: **2**" in out
     assert "⚠️ Scraper-Fehler: 2" in out
     assert "⚠️ Vision-Fehler: 1" in out

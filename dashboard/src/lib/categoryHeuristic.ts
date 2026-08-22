@@ -1,6 +1,6 @@
 /**
  * Title-first classification into the canonical (bucket, subcategory) pairs
- * from taxonomy.ts.
+ * from taxonomy.json / taxonomy.ts.
  *
  * Signal priority:
  *   1. Hard brand rules (Ariel→Waschmittel, Apple iPhone→Smartphone, etc).

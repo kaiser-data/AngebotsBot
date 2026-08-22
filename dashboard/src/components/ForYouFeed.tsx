@@ -34,7 +34,7 @@ import {
   savePrefs,
   type Prefs,
 } from "@/lib/prefs";
-import { applyWeekFilter, excludeExpired, excludeStale, supabase } from "@/lib/supabase";
+import { applyWeekFilter, excludeExpired, excludeStale, fetchAllRows, supabase } from "@/lib/supabase";
 import { BUCKETS, type Bucket } from "@/lib/taxonomy";
 import { parseWeek, weekRange } from "@/lib/week";
 
@@ -105,15 +105,16 @@ export function ForYouFeed() {
   const loadFeed = useCallback(async () => {
     if (!prefs) return;
     setLoading(true);
-    let q = supabase.from("offers").select(FIELDS).eq("is_active", true);
-    q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
-    if (prefs.stores.length > 0) q = q.in("store", prefs.stores);
-    // 1000 = PostgREST max-rows cap; ordering by discount keeps the cut-off
-    // at the least interesting offers.
-    const { data } = await q
-      .order("discount_percent", { ascending: false, nullsFirst: false })
-      .limit(1000);
-    setRows((data as Row[] | null) ?? []);
+    const { rows: data } = await fetchAllRows<Row>((from, to) => {
+      let q = supabase.from("offers").select(FIELDS).eq("is_active", true);
+      q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
+      if (prefs.stores.length > 0) q = q.in("store", prefs.stores);
+      return q
+        .order("discount_percent", { ascending: false, nullsFirst: false })
+        .range(from, to)
+        .returns<Row[]>();
+    });
+    setRows(data);
     lastFetch.current = Date.now();
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps

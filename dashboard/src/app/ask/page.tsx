@@ -108,9 +108,9 @@ function ResultView({ result }: { result: Extract<AskResult, { ok: true }> }) {
     <div className="space-y-6">
       <Card className="p-5">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-          <span>Stichwörter:</span>
+          <span>Modus:</span>
           {result.keywords.length === 0 ? (
-            <Badge tone="neutral">keine</Badge>
+            <Badge tone="neutral">—</Badge>
           ) : (
             result.keywords.map((k) => (
               <Badge key={k} tone="accent">
@@ -118,7 +118,7 @@ function ResultView({ result }: { result: Extract<AskResult, { ok: true }> }) {
               </Badge>
             ))
           )}
-          <span className="ml-auto">{result.candidateCount} Kandidaten geprüft</span>
+          <span className="ml-auto">{result.candidateCount} Treffer geprüft</span>
         </div>
         <div className="prose-sm whitespace-pre-wrap text-sm leading-relaxed text-fg">
           {result.answer}

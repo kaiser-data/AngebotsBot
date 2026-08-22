@@ -59,6 +59,16 @@ type AggRow = {
 
 const BASE_FIELDS = "id, title, category";
 const TAXONOMY_FIELDS = "kaufda_category, kaufda_category_path";
+const DETAIL_EXTRA = "store, price, original_price, discount_percent, image_url, url";
+
+type OfferRowData = AggRow & {
+  store?: string | null;
+  price?: number | null;
+  original_price?: number | null;
+  discount_percent?: number | null;
+  image_url?: string | null;
+  url?: string;
+};
 
 /**
  * Field list for the offers query, including kaufDA's taxonomy columns only
@@ -87,25 +97,24 @@ function bucketFor(row: AggRow, llm: Map<string, LLMCategory>): Bucket {
 }
 
 /**
- * Fetch every active offer for the week, plus the LLM classifications, as two
- * independent queries.
+ * Fetch active offers for the week, plus LLM classifications.
  *
- * They used to be a single query with an embedded
- * `offer_latest_category(...)` join. At the current table size that join makes
- * Postgres exceed the API statement timeout and the request dies with 57014 —
- * which this page then rendered as "0 Angebote" in every bucket. Fetched
- * apart, both are fast.
+ * When `detail` is true, include store/price/image fields so drill-down can
+ * reuse the same rows (avoids a second full-table fetchAllRows).
  */
 async function fetchOffers(
   week: WeekRange | null,
-): Promise<{ rows: AggRow[]; llm: Map<string, LLMCategory>; error: string | null }> {
-  const fields = await offerFields();
+  detail = false,
+): Promise<{ rows: OfferRowData[]; llm: Map<string, LLMCategory>; error: string | null }> {
+  const fields = await offerFields(detail ? DETAIL_EXTRA : "");
   const [offers, categories] = await Promise.all([
-    fetchAllRows<AggRow>((from, to) => {
+    fetchAllRows<OfferRowData>((from, to) => {
       let q = supabase.from("offers").select(fields).eq("is_active", true);
       q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
-      // `fields` is built at runtime, so supabase-js can't infer the row shape.
-      return q.range(from, to).returns<AggRow[]>();
+      if (detail) {
+        q = q.order("discount_percent", { ascending: false, nullsFirst: false });
+      }
+      return q.range(from, to).returns<OfferRowData[]>();
     }),
     fetchAllRows<{ offer_id: string | null } & LLMCategory>((from, to) =>
       supabase
@@ -120,8 +129,6 @@ async function fetchOffers(
     if (c.offer_id) llm.set(c.offer_id, { category: c.category, subcategory: c.subcategory });
   }
 
-  // Losing the LLM categories is survivable — the heuristic covers it.
-  // Losing the offers themselves is not.
   return { rows: offers.rows, llm, error: offers.error };
 }
 
@@ -166,44 +173,14 @@ function aggregate(rows: AggRow[], llmByOffer: Map<string, LLMCategory>): Aggreg
   return { source, bucketCounts, subCounts };
 }
 
-type OfferRowData = AggRow & {
-  store: string | null;
-  price: number | null;
-  original_price: number | null;
-  discount_percent: number | null;
-  image_url: string | null;
-  url: string;
-};
-
-const DETAIL_EXTRA = "store, price, original_price, discount_percent, image_url, url";
-
 const MAX_OFFERS_SHOWN = 60;
 
-/**
- * Offers inside one bucket (optionally one subcategory).
- *
- * Bucketing happens in JS — it draws on kaufDA's taxonomy, the LLM table and
- * the title heuristic — so the filter cannot be pushed into SQL and every
- * candidate row has to come back. `.limit(2000)` used to look like it did that,
- * but PostgREST caps responses at 1000, so lower-discount offers in a bucket
- * silently never appeared.
- */
-async function fetchOffersInBucket(
+function offersInBucket(
+  rows: OfferRowData[],
   cat: Bucket,
   sub: string | null,
-  week: WeekRange | null,
   llm: Map<string, LLMCategory>,
-) {
-  const fields = await offerFields(DETAIL_EXTRA);
-  const { rows } = await fetchAllRows<OfferRowData>((from, to) => {
-    let q = supabase.from("offers").select(fields).eq("is_active", true);
-    q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
-    return q
-      .order("discount_percent", { ascending: false, nullsFirst: false })
-      .range(from, to)
-      .returns<OfferRowData[]>();
-  });
-
+): OfferRowData[] {
   return rows
     .filter((o) => {
       if (bucketFor(o, llm) !== cat) return false;
@@ -217,16 +194,16 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
   const { cat = "", sub = "", week: weekParam } = await searchParams;
   const week = weekRange(parseWeek(weekParam));
 
-  const { rows, llm, error } = await fetchOffers(week);
-  const { source, bucketCounts, subCounts } = aggregate(rows, llm);
-
   const selected = (BUCKETS as readonly string[]).includes(cat) ? (cat as Bucket) : "";
   const selectedSub =
     selected && sub && (SUBCATEGORIES[selected] as readonly string[]).includes(sub)
       ? sub
       : null;
 
-  const offers = selected ? await fetchOffersInBucket(selected, selectedSub, week, llm) : [];
+  // One working-set fetch: include detail columns only when drilling into a bucket.
+  const { rows, llm, error } = await fetchOffers(week, Boolean(selected));
+  const { source, bucketCounts, subCounts } = aggregate(rows, llm);
+  const offers = selected ? offersInBucket(rows, selected, selectedSub, llm) : [];
 
   return (
     <div className="space-y-8">
@@ -380,12 +357,12 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
                       <OfferRow
                         key={o.id}
                         title={o.title ?? "(ohne Titel)"}
-                        store={o.store}
-                        url={o.url}
-                        imageUrl={o.image_url}
-                        price={o.price}
-                        originalPrice={o.original_price}
-                        discountPercent={o.discount_percent}
+                        store={o.store ?? null}
+                        url={o.url ?? "#"}
+                        imageUrl={o.image_url ?? null}
+                        price={o.price ?? null}
+                        originalPrice={o.original_price ?? null}
+                        discountPercent={o.discount_percent ?? null}
                         meta={meta}
                       />
                     );
