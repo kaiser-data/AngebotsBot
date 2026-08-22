@@ -1,34 +1,34 @@
-"""Scraper node — runs KaufdaScraper and populates scraped_offers in state."""
+"""Scraper node — runs KaufdaJsonScraper (httpx) and populates scraped_offers."""
 
 import asyncio
 import logging
 
-from scraper.kaufda import KaufdaScraper
+from scraper.kaufda_json import KaufdaJsonScraper
 from workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
 
 
 def scraper_node(state: AgentState) -> dict:
-    """Synchronous wrapper around the async KaufdaScraper."""
-    logger.info("Scraper node: starting kaufda.de scrape...")
-    scraper = KaufdaScraper()
+    """Synchronous wrapper around the async KaufdaJsonScraper.
+
+    Uses the same httpx/JSON path as the daily cron (`scripts/run_scrape.py`)
+    instead of Playwright — cheaper and covers the full keyword index.
+    """
+    logger.info("Scraper node: starting kaufda.de JSON scrape...")
+    scraper = KaufdaJsonScraper()
 
     try:
-        # Run the async scraper in a new event loop (Chainlit already has one,
-        # but LangGraph nodes are called synchronously by default)
+        # LangGraph nodes are sync; Chainlit/Telegram already have a running loop.
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We are inside an async context (Chainlit) — schedule as task
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(asyncio.run, scraper.scrape_new_offers())
-                    offers, errors = future.result(timeout=300)
-            else:
-                offers, errors = loop.run_until_complete(scraper.scrape_new_offers())
+            asyncio.get_running_loop()
         except RuntimeError:
-            offers, errors = asyncio.run(scraper.scrape_new_offers())
+            offers, errors = asyncio.run(scraper.scrape_all())
+        else:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, scraper.scrape_all())
+                offers, errors = future.result(timeout=600)
 
     except Exception as exc:
         logger.error("Scraper node failed: %s", exc)
@@ -37,7 +37,7 @@ def scraper_node(state: AgentState) -> dict:
             "scrape_errors": [str(exc)],
         }
 
-    logger.info("Scraper node: found %d new offers, %d errors", len(offers), len(errors))
+    logger.info("Scraper node: found %d offers, %d errors", len(offers), len(errors))
     return {
         "scraped_offers": offers,
         "scrape_errors":  errors,

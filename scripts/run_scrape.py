@@ -90,7 +90,8 @@ def _iso_to_date(value):
         return value[:10]
 
 
-def upsert_offers(offers: list[dict]) -> int:
+def upsert_offers(offers: list[dict]) -> list[dict]:
+    """Batch-upsert offers + price_history. Returns successfully upserted rows."""
     sb = get_supabase()
     now = datetime.now(timezone.utc).isoformat()
     write_taxonomy = has_column(sb, "offers", "kaufda_category")
@@ -124,7 +125,7 @@ def upsert_offers(offers: list[dict]) -> int:
             row["kaufda_category_path"] = offer.get("kaufda_category_path")
         rows.append(row)
 
-    inserted = 0
+    all_returned: list[dict] = []
     failed = 0
     for i in range(0, len(rows), BATCH):
         chunk = rows[i:i + BATCH]
@@ -136,7 +137,7 @@ def upsert_offers(offers: list[dict]) -> int:
             logger.error("Giving up on chunk %d–%d: %s", i, i + len(chunk), exc)
             failed += len(chunk)
             continue
-        inserted += len(chunk)
+        all_returned.extend(returned)
         # Append a price_history row per offer for the dashboard's deal score.
         # We need the offer_id from the upsert response since external_id isn't
         # the PK on price_history.
@@ -158,10 +159,10 @@ def upsert_offers(offers: list[dict]) -> int:
                 sb.table("price_history").insert(history_rows).execute()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("price_history insert failed for chunk: %s", exc)
-        logger.info("  upserted %d/%d", inserted, len(rows))
+        logger.info("  upserted %d/%d", len(all_returned), len(rows))
     if failed:
         logger.error("Failed to upsert %d/%d rows", failed, len(rows))
-    return inserted
+    return all_returned
 
 
 async def main_async(args: argparse.Namespace) -> int:
@@ -176,9 +177,9 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.warning("No offers scraped — bailing out before upsert.")
         return 1
 
-    upserted = upsert_offers(offers)
-    logger.info("Upserted %d offers into Supabase", upserted)
-    if upserted == 0:
+    returned = upsert_offers(offers)
+    logger.info("Upserted %d offers into Supabase", len(returned))
+    if not returned:
         logger.error("Every upsert chunk failed — treating run as failed.")
         return 1
 

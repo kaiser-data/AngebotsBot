@@ -105,7 +105,7 @@ def test_get_supabase_builds_cached_client(create_client_mock):
 
     create_client_mock.assert_called_once_with(
         supabase_provider.config.SUPABASE_URL,
-        supabase_provider.config.SUPABASE_ANON_KEY,
+        supabase_provider.config.SUPABASE_SERVICE_ROLE_KEY,
     )
     assert first is client
     assert second is client

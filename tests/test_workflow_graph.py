@@ -25,8 +25,9 @@ def test_route_intent_maps_known_and_unknown_intents(intent, target):
     assert route_intent({"intent": intent}) == target
 
 
-def test_route_after_scraper_uses_vision_when_offers_exist():
-    assert route_after_scraper({"scraped_offers": [{"id": 1}]}) == "vision_node"
+def test_route_after_scraper_goes_to_store_when_offers_exist():
+    """JSON scrape path skips vision — store immediately."""
+    assert route_after_scraper({"scraped_offers": [{"id": 1}]}) == "store_node"
 
 
 def test_route_after_scraper_falls_back_to_response():
@@ -73,12 +74,11 @@ def test_build_graph_registers_nodes_and_edges(state_graph_cls):
         "scraper_node",
         route_after_scraper,
         {
-            "vision_node": "vision_node",
+            "store_node": "store_node",
             "response_node": "response_node",
         },
     )
 
-    graph.add_edge.assert_any_call("vision_node", "store_node")
     graph.add_edge.assert_any_call("store_node", "response_node")
     graph.add_edge.assert_any_call("query_node", "response_node")
     graph.add_edge.assert_any_call("comparison_node", "response_node")
