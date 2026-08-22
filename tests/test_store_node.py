@@ -25,7 +25,8 @@ def test_store_node_batches_upsert_via_shared_helper():
 
     with patch("agents.store_node.upsert_offers", return_value=returned) as upsert:
         with patch("agents.store_node.get_supabase") as get_sb:
-            result = store_node({"scraped_offers": offers, "analyzed_offers": []})
+            with patch("providers.embeddings.drain_embedding_queue", return_value=0):
+                result = store_node({"scraped_offers": offers, "analyzed_offers": []})
 
     upsert.assert_called_once_with(offers)
     get_sb.assert_not_called()  # no analyses → no extra client use required
@@ -52,10 +53,11 @@ def test_store_node_upserts_analyses_in_batch_when_present():
 
     with patch("agents.store_node.upsert_offers", return_value=returned):
         with patch("agents.store_node.get_supabase", return_value=sb):
-            result = store_node({
-                "scraped_offers": offers,
-                "analyzed_offers": analyses,
-            })
+            with patch("providers.embeddings.drain_embedding_queue", return_value=0):
+                result = store_node({
+                    "scraped_offers": offers,
+                    "analyzed_offers": analyses,
+                })
 
     sb.table.assert_called_with("offer_analyses")
     assert result["offers_stored"] == ["uuid-a"]

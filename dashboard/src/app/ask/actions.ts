@@ -27,18 +27,9 @@ export type AskResult = {
   error: string;
 };
 
-const MAX_CANDIDATES = 80;
+const MAX_CANDIDATES = 40;
 const MAX_CITATIONS = 12;
-
-const KEYWORD_SYSTEM = `Du extrahierst deutsche Such-Stichwörter aus einer Nutzerfrage über Supermarkt-Angebote.
-
-Antworte ausschließlich mit JSON: {"keywords": ["...","..."]}.
-
-Regeln:
-- 1 bis 5 Stichwörter, jeweils ein einzelnes Wort oder ein kurzer Stamm (z. B. "wasser", "joghurt", "bio").
-- Keine Stoppwörter ("die", "der", "wo", "günstig", "billig", "vergleich").
-- Stamm-Form bevorzugt: "wasser" statt "Wassersorten", "joghurt" statt "Joghurts".
-- Bei Markenfragen: Marke direkt, z. B. "ariel", "ferrero".`;
+const SIMILARITY_CUTOFF = 0.45;
 
 const ANSWER_SYSTEM = `Du bist ein hilfreicher Berater für deutsche Supermarkt-Angebote.
 
@@ -72,49 +63,67 @@ function safeJson<T>(raw: string, fallback: T): T {
   }
 }
 
-async function extractKeywords(question: string): Promise<string[]> {
-  const res = await llm.chat.completions.create({
-    model: MODEL,
-    temperature: 0,
-    messages: [
-      { role: "system", content: KEYWORD_SYSTEM },
-      { role: "user", content: question },
-    ],
-    response_format: { type: "json_object" },
+async function embedQuery(question: string): Promise<number[] | null> {
+  const { data, error } = await supabase.functions.invoke("generate-embedding", {
+    body: { text: question },
   });
-  const content = res.choices[0]?.message?.content ?? "{}";
-  const parsed = safeJson<{ keywords?: string[] }>(content, {});
-  return (parsed.keywords ?? [])
-    .map((k) => k.trim().toLowerCase())
-    .filter((k) => k.length >= 2 && k.length <= 40)
-    .slice(0, 5);
+  if (error) {
+    console.error("[ask] generate-embedding failed:", error);
+    return null;
+  }
+  const embedding = (data as { embedding?: number[] } | null)?.embedding;
+  if (!Array.isArray(embedding) || embedding.length !== 384) {
+    console.error("[ask] unexpected embedding payload:", data);
+    return null;
+  }
+  return embedding;
 }
 
-async function fetchCandidates(keywords: string[]): Promise<AskedOffer[]> {
-  if (!keywords.length) return [];
-  // ilike OR across all keywords against title.
-  const orFilter = keywords
-    .map((k) => `title.ilike.%${k.replace(/[%,]/g, "")}%`)
-    .join(",");
-  const { data, error } = await supabase
-    .from("offers")
-    .select("id, title, store, price, original_price, discount_percent, image_url, url, category")
-    .eq("is_active", true)
-    .or(orFilter)
-    .order("discount_percent", { ascending: false, nullsFirst: false })
-    .limit(MAX_CANDIDATES);
+async function semanticSearch(question: string): Promise<AskedOffer[]> {
+  const embedding = await embedQuery(question);
+  if (!embedding) return [];
+
+  const { data, error } = await supabase.rpc("search_offers", {
+    query_embedding: embedding,
+    similarity_cutoff: SIMILARITY_CUTOFF,
+    max_price_filter: null,
+    category_filter: null,
+    result_limit: MAX_CANDIDATES,
+  });
   if (error) {
-    console.error("[ask] supabase or-query failed:", error);
+    console.error("[ask] search_offers RPC failed:", error);
     return [];
   }
-  return (data ?? []) as AskedOffer[];
+
+  const rows = (data ?? []) as Array<{
+    offer_id: string;
+    title: string;
+    store: string | null;
+    price: number | null;
+    original_price: number | null;
+    discount_percent: number | null;
+    image_url: string | null;
+    url: string;
+    category: string | null;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.offer_id,
+    title: r.title,
+    store: r.store,
+    price: r.price,
+    original_price: r.original_price,
+    discount_percent: r.discount_percent,
+    image_url: r.image_url,
+    url: r.url,
+    category: r.category,
+  }));
 }
 
 async function answerWithCitations(
   question: string,
   candidates: AskedOffer[],
 ): Promise<{ answer: string; citedIds: string[] }> {
-  // Slim the payload — long descriptions would burn tokens.
   const slimmed = candidates.map((o) => ({
     id: o.id,
     title: o.title,
@@ -151,16 +160,13 @@ export async function askOffers(question: string): Promise<AskResult> {
   if (!isConfigured()) return { ok: false, error: "GEMINI_API_KEY ist nicht gesetzt." };
 
   try {
-    const keywords = await extractKeywords(q);
-    const candidates = await fetchCandidates(keywords);
+    const candidates = await semanticSearch(q);
     if (candidates.length === 0) {
       return {
         ok: true,
         question: q,
-        keywords,
-        answer: keywords.length
-          ? `Keine aktiven Angebote zu **${keywords.join(", ")}** gefunden.`
-          : "Konnte keine Stichwörter aus der Frage ableiten.",
+        keywords: ["semantisch"],
+        answer: "Keine passenden aktiven Angebote gefunden.",
         citedOffers: [],
         candidateCount: 0,
       };
@@ -173,7 +179,7 @@ export async function askOffers(question: string): Promise<AskResult> {
     return {
       ok: true,
       question: q,
-      keywords,
+      keywords: ["semantisch"],
       answer,
       citedOffers: cited,
       candidateCount: candidates.length,

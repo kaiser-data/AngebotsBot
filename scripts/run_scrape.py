@@ -183,6 +183,21 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.error("Every upsert chunk failed — treating run as failed.")
         return 1
 
+    # Drain embedding_queue so bulk inserts don't leave semantic search empty.
+    try:
+        from providers.embeddings import drain_embedding_queue
+        drained = 0
+        # Cap loops so a huge backlog can't blow the Actions budget.
+        for _ in range(20):
+            n = drain_embedding_queue(limit=200)
+            drained += n
+            if n == 0:
+                break
+        if drained:
+            logger.info("Drained %d embedding_queue jobs", drained)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("embedding drain skipped: %s", exc)
+
     if args.categorize:
         # Lazy-import to keep the dry-run path light.
         from scripts.categorize_offers import (

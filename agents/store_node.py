@@ -68,4 +68,11 @@ def store_node(state: AgentState) -> dict:
                 db_errors.append(msg)
 
     logger.info("Store node: stored %d offers, %d errors", len(stored_ids), len(db_errors))
+
+    try:
+        from providers.embeddings import drain_embedding_queue
+        drain_embedding_queue(limit=min(200, max(len(stored_ids), 1) * 2))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("embedding drain skipped: %s", exc)
+
     return {"offers_stored": stored_ids, "db_errors": db_errors}
