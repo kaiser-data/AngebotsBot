@@ -1,6 +1,6 @@
 /**
  * ISO-week helpers, anchored to Europe/Berlin so the result is correct no
- * matter what timezone the server (Netlify, GHA, …) is running in.
+ * matter what timezone the server (Vercel, GHA, …) is running in.
  *
  * The returned `WeekRange.from` and `WeekRange.to` are Date objects pinned to
  * UTC midnight of the Berlin calendar date — that way both

@@ -1,134 +1,77 @@
-# Deploy the dashboard to Netlify
+# Deploy the dashboard (Vercel)
 
-A walkthrough for putting the dashboard at a public URL your friends can use.
+Live: **https://angebotsbot.vercel.app** — Vercel project `angebotsbot`
+(Hobby plan, root directory `dashboard`).
 
 ## What gets deployed
 
-Only the Next.js dashboard in `dashboard/`. The Python bot (scraper, categorizer,
-Telegram) keeps running on your own machine — Netlify only runs Node, not Python.
-The dashboard reads whatever's already in Supabase.
+Only the Next.js dashboard in `dashboard/`. Scraping, categorizing and database
+cleanup run in the daily GitHub Action (`.github/workflows/scrape.yml`), not on
+Vercel. The dashboard just reads whatever is in Supabase.
+
+Why Vercel and not Cloudflare: Cloudflare Workers' free plan allows ~10 ms of
+CPU per request, and `/categories` classifies thousands of offers per render.
+Vercel runs Next.js natively, no adapter.
 
 ---
 
-## One-time prep
+## Environment variables
 
-### 1. Tighten Supabase RLS
+Set in Vercel → Project → Settings → Environment Variables (Production + Preview):
 
-Run migration `007_tighten_rls_for_public_dashboard.sql` in the Supabase SQL
-Editor. This removes anonymous write access to every table and blocks anon reads
-of the `users` / `alerts` / `notification_log` tables (which contain Telegram
-chat IDs and email addresses).
+| Key | Value | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://twurjtmisvohrtozkkzt.supabase.co` | |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API → anon key | type **config** (public by design; RLS from migration 007 protects the data) |
+| `GEMINI_API_KEY` | Google AI key | server-only, for `/ask` |
+| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/` | |
+| `TEXT_MODEL` | `gemini-2.5-flash` | |
 
-```bash
-# either via the Supabase CLI:
-supabase db push
+> **Never add `SUPABASE_SERVICE_ROLE_KEY`** to Vercel. The dashboard must never see it.
 
-# or paste the migration SQL into the Supabase Dashboard SQL Editor.
-```
-
-After this, the Python bot **must** use the `service_role` key (already wired in
-config.py — make sure `SUPABASE_SERVICE_ROLE_KEY` is set in your local `.env`).
-
-### 2. Verify the gates locally
+From the CLI (in `dashboard/`, after `vercel link --project angebotsbot`):
 
 ```bash
-cd dashboard
-npm run dev
-# → http://localhost:3000 should still work — service_role bypass + anon reads cover everything the dashboard needs.
-```
-
-If a page suddenly 404s data, RLS is rejecting an anon query. Either widen the
-specific RLS policy for that table or move the query server-side using
-service_role.
-
-### 3. Push to GitHub
-
-```bash
-git add netlify.toml dashboard/ scripts/ providers/supabase_client.py config.py supabase/migrations/007_*.sql .env.example
-git commit -m "feat(dashboard): add Netlify deploy + tighten RLS"
-git push origin main
+printf '%s' "$VALUE" | vercel env add GEMINI_API_KEY production --force
+printf '%s' "$ANON"  | vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production --type config --yes --force
 ```
 
 ---
 
-## Netlify setup (one-time, 3 minutes)
+## Deploying
 
-1. Go to https://app.netlify.com → **Add new site** → **Import from Git**
-2. Connect GitHub, pick `kaiser-data/AngebotsBot`
-3. Netlify reads `netlify.toml` and auto-fills:
-   - Base directory: `dashboard`
-   - Build command: `npm ci && npm run build`
-   - Publish directory: `.next`
-4. Click **Show advanced** → **Environment variables**, paste these three:
+- **Automatic (once GitHub is connected):** every push to `main` deploys to
+  production; every other branch / PR gets a preview URL.
+  One-time setup: Vercel → Account Settings → Authentication → connect GitHub,
+  then Project → Settings → Git → connect `kaiser-data/AngebotsBot`.
+- **Manual:** from the repo root, `vercel deploy --prod`.
 
-   | Key | Value |
-   |---|---|
-   | `NEXT_PUBLIC_SUPABASE_URL` | `https://twurjtmisvohrtozkkzt.supabase.co` |
-   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | *(your anon key from Supabase Dashboard → Settings → API)* |
-   | `GEMINI_API_KEY` | *(only needed if you want `/ask` to work)* |
-
-   > **Do NOT add `SUPABASE_SERVICE_ROLE_KEY`** to Netlify. The dashboard must never see it.
-
-5. **Deploy site**. First build takes ~2 min.
-6. You'll get a `https://random-name.netlify.app` URL. Change it under
-   **Site settings → Site information → Change site name**.
+Server pages revalidate every 60 s, so new scrape data shows up without a deploy.
 
 ---
 
-## After deploy
+## Before going public: Supabase RLS
 
-- Every `git push` to `main` automatically rebuilds and redeploys.
-- The dashboard always shows current Supabase data. There's no separate "data
-  build step" — refreshing the page is enough.
-- To force a fresh build (e.g. after editing the taxonomy), open Netlify →
-  **Deploys** → **Trigger deploy → Clear cache and deploy site**.
-
-### Running the scraper / categorizer
-
-These stay on your machine. After they finish writing to Supabase, the next
-page-view on the deployed dashboard sees the new data (server pages have a 60s
-revalidate; data older than that is refetched).
-
-```bash
-# your machine, not Netlify
-python -m scripts.categorize_offers --all
-```
-
----
-
-## What's exposed publicly
-
-After migration 007, anyone with the URL can read:
-
-- ✅ `offers` (titles, prices, store, image_url, validity)
-- ✅ `offer_analyses` (deal verdict, tags)
-- ✅ `price_history` (price trends)
-- ✅ `llm_categories` (category + subcategory)
-- ✅ `brochure_pages`, `offer_reviews`
-
-And **cannot** read or write:
-
-- 🔒 `users` (telegram_chat_id, email)
-- 🔒 `alerts` (saved searches)
-- 🔒 `notification_log`
-- 🔒 Any write at all to the readable tables
-
-If you ever want to add user-supplied reviews or alerts via the dashboard, those
-have to go through a **Server Action with the service_role client** (a new
-`supabase-server.ts` that only runs on the Netlify edge, never reaches the
-browser) — happy to add that when needed.
+Migration `007_tighten_rls_for_public_dashboard.sql` must be applied. After it,
+anyone with the URL can read offers, price history, categories and analyses —
+and **cannot** read `users`, `alerts`, `notification_log`, or write anything.
+The Python side uses the `service_role` key (GitHub secret
+`SUPABASE_SERVICE_ROLE_KEY`).
 
 ---
 
 ## Troubleshooting
 
-**`Missing NEXT_PUBLIC_SUPABASE_URL`** during build
-→ Env var not set in Netlify → fix in **Site settings → Environment variables**.
+**`Missing NEXT_PUBLIC_SUPABASE_URL`** during build → env var not set for that
+environment (Production vs Preview).
 
-**A page shows zero rows even though Supabase has data**
-→ Almost always an RLS issue. Open Supabase → **Authentication → Policies**,
-find the table, and check the anon role has a `select` policy with `using
-(true)`.
+**Pages say "konnte nicht geladen werden"** → Supabase is down or paused. Free
+projects pause after ~7 days without activity; the daily scrape prevents that as
+long as the workflow is enabled (`gh workflow list --all`).
 
-**Build fails with `npm ci` cannot resolve lockfile**
-→ Commit `dashboard/package-lock.json` (already committed; just confirming).
+**A page shows zero rows although Supabase has data** → RLS: the table needs an
+anon `select` policy with `using (true)`.
+
+**Database near 500 MB** → see the table sizes at the end of the daily Action
+log ("Prune archived rows + log table sizes"). Old rows are archived to the
+`data-archive` branch and deleted automatically (`scripts/retention.py`).
