@@ -193,3 +193,22 @@ def test_nothing_to_do_writes_empty_manifest(tmp_path):
     manifest = retention.export(FakeSB(db), tmp_path, NOW)
     assert manifest["files"] == [] and manifest["history_ids"] == []
     retention.prune(FakeSB(db), tmp_path, manifest)     # no-op, no error
+
+
+def test_statement_timeouts_are_retried_other_errors_are_not(monkeypatch):
+    monkeypatch.setattr(retention.time, "sleep", lambda _s: None)
+
+    class Flaky:
+        def __init__(self, errors):
+            self.errors = list(errors)
+
+        def execute(self):
+            if self.errors:
+                raise RuntimeError(self.errors.pop(0))
+            return "ok"
+
+    assert retention._execute(Flaky(["{'code': '57014'}"])) == "ok"
+    with pytest.raises(RuntimeError, match="42703"):
+        retention._execute(Flaky(["{'code': '42703'}"]))
+    with pytest.raises(RuntimeError, match="57014"):
+        retention._execute(Flaky(["57014"] * 3))

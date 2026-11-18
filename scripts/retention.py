@@ -36,6 +36,7 @@ import gzip
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -92,6 +93,22 @@ def chunks(items: list, size: int):
         yield items[i:i + size]
 
 
+def _execute(q, tries: int = 3):
+    """Run a query, retrying statement timeouts (57014) with backoff.
+
+    Right after large deletes the tables are full of dead rows until autovacuum
+    catches up, and the first scans intermittently exceed the API timeout.
+    """
+    for attempt in range(1, tries + 1):
+        try:
+            return q.execute()
+        except Exception as exc:  # noqa: BLE001 — postgrest APIError shape varies
+            if attempt == tries or "57014" not in str(exc):
+                raise
+            logger.warning("statement timeout (attempt %d/%d) — retrying", attempt, tries)
+            time.sleep(10 * attempt)
+
+
 def _existing_columns(sb, table: str, wanted: list[str]) -> list[str]:
     """Columns from `wanted` that exist (taxonomy columns depend on migration 010)."""
     cols = []
@@ -118,7 +135,7 @@ def _fetch_older(sb, table: str, columns: list[str], ts_col: str, before: str, c
         # Keyset pagination: stable and fast even while rows are being added.
         if rows:
             q = q.gt("id", rows[-1]["id"])
-        page = q.execute().data or []
+        page = _execute(q).data or []
         rows.extend(page)
         if len(page) < PAGE:
             break
@@ -140,7 +157,7 @@ def _history_of(sb, offer_ids: list[str]) -> list[dict]:
             )
             if last is not None:
                 q = q.gt("id", last)
-            page = q.execute().data or []
+            page = _execute(q).data or []
             rows.extend(page)
             if len(page) < PAGE:
                 break
@@ -204,12 +221,12 @@ def prune(sb, out: Path, manifest: dict) -> dict:
     deleted = {"price_history": 0, "offers": 0}
     # History first, by id: these rows are in the archive whatever their age.
     for ids in chunks(manifest["history_ids"], HISTORY_ID_CHUNK):
-        sb.table("price_history").delete().in_("id", ids).execute()
+        _execute(sb.table("price_history").delete().in_("id", ids))
         deleted["price_history"] += len(ids)
     for ids in chunks(manifest["offer_ids"], ID_CHUNK):
         # Re-check the age: an offer that came back since the export stays.
-        sb.table("offers").delete().in_("id", ids) \
-            .lt("last_seen_at", manifest["offers_before"]).execute()
+        _execute(sb.table("offers").delete().in_("id", ids)
+                 .lt("last_seen_at", manifest["offers_before"]))
         deleted["offers"] += len(ids)
     logger.info("pruned %(price_history)d price_history rows, %(offers)d offers", deleted)
 
