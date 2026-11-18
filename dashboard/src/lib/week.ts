@@ -1,6 +1,6 @@
 /**
  * ISO-week helpers, anchored to Europe/Berlin so the result is correct no
- * matter what timezone the server (Netlify, GHA, …) is running in.
+ * matter what timezone the server (Vercel, GHA, …) is running in.
  *
  * The returned `WeekRange.from` and `WeekRange.to` are Date objects pinned to
  * UTC midnight of the Berlin calendar date — that way both
@@ -27,8 +27,8 @@ export function parseWeek(v: string | undefined | null): WeekKey {
 
 const TZ = "Europe/Berlin";
 
-/** Today's calendar date in Berlin, formatted YYYY-MM-DD. */
-function berlinDate(d: Date): string {
+/** Calendar date in Berlin, formatted YYYY-MM-DD. */
+export function berlinDate(d: Date): string {
   // en-CA conveniently formats as YYYY-MM-DD.
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,

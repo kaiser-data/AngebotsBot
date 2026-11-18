@@ -20,6 +20,18 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Tests
+
+```bash
+npm test          # unit tests (vitest) — pure logic in src/lib, no database needed
+npm run test:e2e  # Playwright use-case tests against a running app + live Supabase
+```
+
+Unit tests live in `tests/unit/` and cover the places where mistakes are easy:
+Berlin-vs-UTC dates, week ranges across DST/year ends, the 1000-row PostgREST
+cap, discount plausibility, category classification of German compound words,
+search-term escaping, and the feed ranking.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

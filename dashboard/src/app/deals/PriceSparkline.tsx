@@ -1,7 +1,8 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { formatEuro } from "@/lib/search";
+import { useMounted } from "@/lib/useMounted";
 import {
   Area,
   AreaChart,
@@ -16,8 +17,7 @@ type Point = { observed_at: string; price: number | null; loyalty_price: number 
 
 export function PriceSparkline({ data }: { data: Point[] }) {
   const { resolvedTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useMounted();
 
   const isDark = mounted && resolvedTheme === "dark";
   const axis = isDark ? "#71717a" : "#a1a1aa";       // zinc-500/400
@@ -58,14 +58,14 @@ export function PriceSparkline({ data }: { data: Point[] }) {
           <YAxis
             stroke={axis}
             tick={{ fontSize: 11, fill: axis }}
-            tickFormatter={(v) => `${v.toFixed(2)} €`}
+            tickFormatter={(v) => formatEuro(v)}
             tickLine={false}
             axisLine={false}
             domain={["auto", "auto"]}
           />
           <Tooltip
             cursor={{ stroke: grid, strokeWidth: 1 }}
-            formatter={(v) => (typeof v === "number" ? `${v.toFixed(2)} €` : "—")}
+            formatter={(v) => formatEuro(typeof v === "number" ? v : null)}
             contentStyle={{
               backgroundColor: tooltipBg,
               border: `1px solid ${grid}`,

@@ -14,6 +14,7 @@
  */
 
 import {
+  AlertTriangle,
   Heart,
   Radar,
   RefreshCw,
@@ -22,10 +23,16 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge, Card, EmptyState, OfferRow, PageHeader } from "@/components/ui";
-import { classify } from "@/lib/categoryHeuristic";
-import { discountTrust } from "@/lib/offerSanity";
+import {
+  classifyFeedRow,
+  pickBargains,
+  pickMine,
+  PRICE_LOW_PERCENTILE,
+  relativeTime,
+  type FeedRow,
+} from "@/lib/feed";
 import {
   DEFAULT_PREFS,
   isDrugstore,
@@ -34,144 +41,128 @@ import {
   savePrefs,
   type Prefs,
 } from "@/lib/prefs";
-import { applyWeekFilter, excludeExpired, excludeStale, supabase } from "@/lib/supabase";
+import {
+  applyWeekFilter,
+  excludeExpired,
+  excludeStale,
+  fetchAllRows,
+  hasColumn,
+  supabase,
+} from "@/lib/supabase";
 import { BUCKETS, type Bucket } from "@/lib/taxonomy";
-import { parseWeek, weekRange } from "@/lib/week";
-
-type Row = {
-  id: string;
-  title: string;
-  store: string | null;
-  category: string | null;
-  price: number | null;
-  original_price: number | null;
-  discount_percent: number | null;
-  image_url: string | null;
-  url: string;
-  last_seen_at: string | null;
-};
-
-type ClassifiedRow = Row & {
-  bucket: Bucket;
-  subcategory: string;
-  /** discount with implausible values nulled out */
-  eff: number | null;
-  trusted: boolean;
-};
+import { useMounted } from "@/lib/useMounted";
+import { parseWeek, weekRange, type WeekRange } from "@/lib/week";
 
 const FIELDS =
   "id, title, store, category, price, original_price, discount_percent, image_url, url, last_seen_at";
+const TAXONOMY_FIELDS = "kaufda_category, kaufda_category_path";
+/** Refetch when the tab comes back after this long. */
+const STALE_MS = 5 * 60_000;
 
-function classifyRow(o: Row): ClassifiedRow {
-  const { bucket, subcategory } = classify(o.title, o.category);
-  const trust = discountTrust(o.title, o.discount_percent);
-  return {
-    ...o,
-    bucket,
-    subcategory,
-    eff: trust === "implausible" ? null : o.discount_percent,
-    trusted: trust === "trusted",
-  };
+/**
+ * Load the feed's candidate offers. Includes kaufDA's taxonomy columns when the
+ * schema has them, so the feed classifies offers exactly like /categories.
+ */
+async function fetchFeed(stores: string[], week: WeekRange | null) {
+  const fields = (await hasColumn("offers", "kaufda_category"))
+    ? `${FIELDS}, ${TAXONOMY_FIELDS}`
+    : FIELDS;
+  return fetchAllRows<FeedRow>((from, to) => {
+    let q = supabase.from("offers").select(fields).eq("is_active", true);
+    q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
+    if (stores.length > 0) q = q.in("store", stores);
+    return q
+      .order("discount_percent", { ascending: false, nullsFirst: false })
+      .order("id")
+      .range(from, to)
+      .returns<FeedRow[]>();
+  });
 }
 
-function relativeTime(iso: string | null): string {
-  if (!iso) return "unbekannt";
-  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-  if (mins < 60) return `vor ${mins} min`;
-  const hours = Math.round(mins / 60);
-  if (hours < 36) return `vor ${hours} h`;
-  return `vor ${Math.round(hours / 24)} Tagen`;
-}
+type FeedResult = { key: string; rows: FeedRow[]; error: string | null; at: number };
 
 export function ForYouFeed() {
   const searchParams = useSearchParams();
   const weekParam = searchParams.get("week") ?? undefined;
   const week = useMemo(() => weekRange(parseWeek(weekParam)), [weekParam]);
 
-  // null until mounted → no hydration mismatch with localStorage.
-  const [prefs, setPrefs] = useState<Prefs | null>(null);
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Prefs live in localStorage → only readable after mount (no hydration mismatch).
+  const mounted = useMounted();
+  const [savedPrefs, setSavedPrefs] = useState<Prefs | null>(null);
+  const prefs = useMemo(
+    () => savedPrefs ?? (mounted ? loadPrefs() : null),
+    [savedPrefs, mounted],
+  );
+
   const [panelOpen, setPanelOpen] = useState(false);
   const [showAllMine, setShowAllMine] = useState(false);
   const [scores, setScores] = useState<Map<string, number>>(new Map());
-  const lastFetch = useRef(0);
+  const [nonce, setNonce] = useState(0);
+  const [result, setResult] = useState<FeedResult | null>(null);
 
-  useEffect(() => setPrefs(loadPrefs()), []);
-
-  const storesKey = prefs ? prefs.stores.slice().sort().join("|") : null;
-  const prefsLoaded = prefs != null;
-
-  const loadFeed = useCallback(async () => {
-    if (!prefs) return;
-    setLoading(true);
-    let q = supabase.from("offers").select(FIELDS).eq("is_active", true);
-    q = applyWeekFilter(excludeExpired(excludeStale(q)), week);
-    if (prefs.stores.length > 0) q = q.in("store", prefs.stores);
-    // 1000 = PostgREST max-rows cap; ordering by discount keeps the cut-off
-    // at the least interesting offers.
-    const { data } = await q
-      .order("discount_percent", { ascending: false, nullsFirst: false })
-      .limit(1000);
-    setRows((data as Row[] | null) ?? []);
-    lastFetch.current = Date.now();
-    setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storesKey, weekParam, prefsLoaded]);
+  const storesKey = prefs ? [...prefs.stores].sort().join("|") : null;
+  // Everything that should trigger a refetch. A response is only shown if it
+  // belongs to the CURRENT key — a slow answer for last week's filter can't
+  // overwrite this week's rows.
+  const requestKey = prefs ? `${storesKey}§${weekParam ?? ""}§${nonce}` : null;
+  const loading = requestKey != null && result?.key !== requestKey;
 
   useEffect(() => {
-    void loadFeed();
-  }, [loadFeed]);
+    if (!requestKey || !prefs) return;
+    let cancelled = false;
+    void fetchFeed(prefs.stores, week).then(({ rows, error }) => {
+      if (!cancelled) setResult({ key: requestKey, rows, error, at: Date.now() });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // prefs.stores and week are encoded in requestKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestKey]);
 
-  // Refetch when the tab comes back into focus after >5 min.
+  const refresh = () => setNonce((n) => n + 1);
+
+  // Refetch when the tab comes back into focus after a while.
+  const fetchedAt = result?.at ?? 0;
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible" && Date.now() - lastFetch.current > 5 * 60_000) {
-        void loadFeed();
+      if (document.visibilityState === "visible" && Date.now() - fetchedAt > STALE_MS) {
+        setNonce((n) => n + 1);
       }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [loadFeed]);
+  }, [fetchedAt]);
 
-  const classified = useMemo(() => rows.map(classifyRow), [rows]);
+  const rows = useMemo(() => (loading || !result ? [] : result.rows), [loading, result]);
+  const loadError = loading ? null : (result?.error ?? null);
+  const classified = useMemo(() => rows.map(classifyFeedRow), [rows]);
 
-  const mine = useMemo(() => {
-    if (!prefs) return [];
-    return classified
-      .filter((o) => prefs.buckets.includes(o.bucket))
-      .sort((a, b) => {
-        const boost = (o: ClassifiedRow) => {
-          const p = scores.get(o.id);
-          return (o.eff ?? 0) + (p != null && p <= 20 ? 15 : 0);
-        };
-        return boost(b) - boost(a);
-      })
-      .slice(0, 60);
-  }, [classified, prefs, scores]);
+  const mine = useMemo(
+    () => (prefs ? pickMine(classified, prefs, scores) : []),
+    [classified, prefs, scores],
+  );
+  const bargains = useMemo(
+    () => (prefs ? pickBargains(classified, prefs) : []),
+    [classified, prefs],
+  );
 
-  const bargains = useMemo(() => {
-    if (!prefs || prefs.bargainMinDiscount == null) return [];
-    const min = prefs.bargainMinDiscount;
-    return classified
-      .filter(
-        (o) =>
-          !prefs.buckets.includes(o.bucket) && o.trusted && o.eff != null && o.eff >= min,
-      )
-      .sort((a, b) => (b.eff ?? 0) - (a.eff ?? 0))
-      .slice(0, 24);
-  }, [classified, prefs]);
+  // Deal scores (price percentile vs 90-day history) for the candidate offers.
+  // Ranked by trusted discount (no scores needed) so the id list is stable.
+  const scoreIds = useMemo(() => {
+    if (!prefs) return "";
+    const top = pickMine(classified, prefs).map((o) => o.id);
+    return [...top, ...bargains.map((o) => o.id)].slice(0, 100).join(",");
+  }, [classified, prefs, bargains]);
 
-  // Deal scores (price percentile vs 90-day history) for the visible offers.
   useEffect(() => {
-    const ids = [...mine.map((o) => o.id), ...bargains.map((o) => o.id)];
-    if (ids.length === 0) return;
+    if (!scoreIds) return;
     let cancelled = false;
     void (async () => {
       const { data } = await supabase
         .from("offer_deal_score")
         .select("offer_id, price_percentile")
-        .in("offer_id", ids.slice(0, 100))
+        .in("offer_id", scoreIds.split(","))
         .not("price_percentile", "is", null);
       if (cancelled || !data) return;
       setScores((prev) => {
@@ -183,8 +174,7 @@ export function ForYouFeed() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, storesKey]);
+  }, [scoreIds]);
 
   const lastSeen = useMemo(() => {
     let max: string | null = null;
@@ -205,15 +195,20 @@ export function ForYouFeed() {
 
   const summary = [
     prefs.buckets.length === BUCKETS.length ? "Alle Kategorien" : prefs.buckets.join(", "),
-    prefs.stores.length === 0 ? "alle Märkte" : `${prefs.stores.length} Märkte`,
+    prefs.stores.length === 0
+      ? "alle Märkte"
+      : prefs.stores.length === 1
+        ? prefs.stores[0]
+        : `${prefs.stores.length} Märkte`,
     week ? week.label : "alle Wochen",
   ].join(" · ");
 
   const savePanel = (next: Prefs) => {
     const merged = { ...next, onboarded: true };
     savePrefs(merged);
-    setPrefs(merged);
+    setSavedPrefs(merged);
     setPanelOpen(false);
+    setShowAllMine(false);
   };
 
   const mineVisible = showAllMine ? mine : mine.slice(0, 30);
@@ -228,8 +223,10 @@ export function ForYouFeed() {
           </span>
           <button
             type="button"
-            onClick={() => void loadFeed()}
+            onClick={refresh}
+            disabled={loading}
             aria-label="Daten aktualisieren"
+            title="Daten aktualisieren"
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-fg-muted hover:border-border-strong hover:text-fg"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -254,6 +251,16 @@ export function ForYouFeed() {
         />
       )}
 
+      {loadError && !loading && mine.length > 0 && (
+        <p className="flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg-muted">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Nicht alle Angebote konnten geladen werden — die Liste ist evtl. unvollständig.
+          <button type="button" onClick={refresh} className="ml-auto font-medium text-fg hover:underline">
+            Erneut versuchen
+          </button>
+        </p>
+      )}
+
       <section className="space-y-3">
         <div className="flex items-baseline justify-between">
           <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
@@ -266,6 +273,8 @@ export function ForYouFeed() {
           // Also covers filter changes: never show rows from the previous
           // store selection while the refetch is in flight.
           <FeedSkeleton />
+        ) : loadError && mine.length === 0 ? (
+          <LoadError message={loadError} onRetry={refresh} />
         ) : mine.length === 0 ? (
           <EmptyState
             icon={<Heart className="h-8 w-8" />}
@@ -346,9 +355,32 @@ export function ForYouFeed() {
   );
 }
 
+function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <Card className="flex flex-col items-center gap-3 p-10 text-center">
+      <AlertTriangle className="h-8 w-8 text-fg-subtle" />
+      <div className="text-sm font-medium text-fg">Angebote konnten nicht geladen werden</div>
+      <div className="max-w-sm text-sm text-fg-muted">
+        Die Datenbank antwortet gerade nicht. Das ist meist nach kurzer Zeit behoben.
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded-md bg-fg px-4 py-2 text-sm font-medium text-bg hover:opacity-90"
+      >
+        Erneut versuchen
+      </button>
+      <details className="text-xs text-fg-subtle">
+        <summary className="cursor-pointer">Technische Details</summary>
+        {message}
+      </details>
+    </Card>
+  );
+}
+
 /** "Preis-Tief" — current price is in the cheapest quintile of its 90-day history. */
 function PriceLowBadge({ pct }: { pct: number | undefined }) {
-  if (pct == null || pct > 20) return null;
+  if (pct == null || pct > PRICE_LOW_PERCENTILE) return null;
   return (
     <Badge tone="positive" className="hidden gap-1 sm:inline-flex" title={`Günstiger als ${(100 - pct).toFixed(0)}% der letzten 90 Tage`}>
       <TrendingDown className="h-3 w-3" />
@@ -401,16 +433,20 @@ function PrefsPanel({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      let q = supabase
-        .from("offers")
-        .select("store")
-        .eq("is_active", true)
-        .not("store", "is", null);
-      q = excludeExpired(excludeStale(q));
-      const { data } = await q.limit(8000);
+      // fetchAllRows: a plain .limit(8000) is silently capped at 1000 rows by
+      // PostgREST, which hid most stores and under-counted the rest.
+      const { rows: data } = await fetchAllRows<{ store: string }>((from, to) => {
+        let q = supabase
+          .from("offers")
+          .select("store")
+          .eq("is_active", true)
+          .not("store", "is", null);
+        q = excludeExpired(excludeStale(q));
+        return q.order("id").range(from, to).returns<{ store: string }[]>();
+      });
       if (cancelled) return;
       const counts = new Map<string, number>();
-      for (const r of (data ?? []) as { store: string }[]) {
+      for (const r of data) {
         counts.set(r.store, (counts.get(r.store) ?? 0) + 1);
       }
       setStoreOptions(
@@ -438,7 +474,14 @@ function PrefsPanel({
       stores: d.stores.includes(s) ? d.stores.filter((x) => x !== s) : [...d.stores, s],
     }));
 
-  const allStores = storeOptions ?? [];
+  // A previously chosen store with no current offers must stay visible, or it
+  // keeps filtering the feed with no way to deselect it.
+  const allStores = useMemo(() => {
+    const opts = storeOptions ?? [];
+    const known = new Set(opts.map((o) => o.store));
+    const missing = prefs.stores.filter((s) => !known.has(s)).map((store) => ({ store, n: 0 }));
+    return [...opts, ...missing];
+  }, [storeOptions, prefs.stores]);
   const supermarkets = allStores.filter((s) => isSupermarket(s.store));
   const drugstores = allStores.filter((s) => isDrugstore(s.store));
   const others = allStores.filter((s) => !isSupermarket(s.store) && !isDrugstore(s.store));

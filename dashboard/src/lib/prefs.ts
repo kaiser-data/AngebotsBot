@@ -59,7 +59,7 @@ const SUPERMARKET_PATTERNS: RegExp[] = [
   /^combi\b/i,
 ];
 
-const DRUGSTORE_PATTERNS: RegExp[] = [/^dm/i, /^rossmann/i, /^müller\b/i, /^budni/i];
+const DRUGSTORE_PATTERNS: RegExp[] = [/^dm\b/i, /^rossmann/i, /^müller\b/i, /^budni/i];
 
 export function isSupermarket(store: string): boolean {
   return SUPERMARKET_PATTERNS.some((p) => p.test(store.trim()));
@@ -72,11 +72,11 @@ export function isDrugstore(store: string): boolean {
 const STORAGE_KEY = "angebotsbot.prefs.v1";
 
 /** Parse + validate whatever is in storage; silently fall back to defaults. */
-function sanitize(raw: unknown): Prefs {
+export function sanitizePrefs(raw: unknown): Prefs {
   if (typeof raw !== "object" || raw === null) return DEFAULT_PREFS;
   const r = raw as Record<string, unknown>;
   const stores = Array.isArray(r.stores)
-    ? r.stores.filter((s): s is string => typeof s === "string")
+    ? [...new Set(r.stores.filter((s): s is string => typeof s === "string" && s.trim() !== ""))]
     : DEFAULT_PREFS.stores;
   const buckets = Array.isArray(r.buckets)
     ? (r.buckets.filter(
@@ -93,7 +93,7 @@ function sanitize(raw: unknown): Prefs {
         : DEFAULT_PREFS.bargainMinDiscount;
   return {
     stores,
-    buckets: buckets.length > 0 ? buckets : DEFAULT_PREFS.buckets,
+    buckets: buckets.length > 0 ? [...new Set(buckets)] : DEFAULT_PREFS.buckets,
     bargainMinDiscount,
     onboarded: r.onboarded === true,
   };
@@ -104,7 +104,7 @@ export function loadPrefs(): Prefs {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_PREFS;
-    return sanitize(JSON.parse(raw));
+    return sanitizePrefs(JSON.parse(raw));
   } catch {
     return DEFAULT_PREFS;
   }

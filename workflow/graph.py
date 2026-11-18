@@ -31,9 +31,9 @@ def route_intent(state: AgentState) -> str:
 
 
 def route_after_scraper(state: AgentState) -> str:
-    """After scraping: go to vision if we have new offers, else straight to response."""
+    """After scraping: batch-store offers (skip vision — taxonomy covers ingest)."""
     if state.get("scraped_offers"):
-        return "vision_node"
+        return "store_node"
     return "response_node"
 
 
@@ -69,17 +69,17 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # Scrape path: scraper → vision (if offers found) → store → response
+    # Scrape path: scraper → store (if offers found) → response
+    # Vision stays registered for optional/manual use but is not on the ingest path.
     graph.add_conditional_edges(
         "scraper_node",
         route_after_scraper,
         {
-            "vision_node":   "vision_node",
+            "store_node":    "store_node",
             "response_node": "response_node",
         },
     )
-    graph.add_edge("vision_node",      "store_node")
-    graph.add_edge("store_node",       "response_node")
+    graph.add_edge("store_node", "response_node")
 
     # Query / compare / alert paths → response
     graph.add_edge("query_node",       "response_node")

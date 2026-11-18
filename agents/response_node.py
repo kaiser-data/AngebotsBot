@@ -31,11 +31,12 @@ def response_node(state: AgentState) -> dict:
             msg = "Keine neuen Angebote gefunden — die Datenbank ist bereits aktuell."
         else:
             msg = (
-                f"**Scraping abgeschlossen!** 🎉\n\n"
-                f"- Neue Angebote gefunden: **{scraped}**\n"
-                f"- Davon analysiert (Vision KI): **{analyzed}**\n"
+                f"**Scraping abgeschlossen!**\n\n"
+                f"- Angebote gefunden: **{scraped}**\n"
                 f"- In Datenbank gespeichert: **{stored}**\n"
             )
+            if analyzed:
+                msg += f"- Vision-Analysen: **{analyzed}**\n"
             if s_errors:
                 msg += f"\n⚠️ Scraper-Fehler: {len(s_errors)}"
             if v_errors:

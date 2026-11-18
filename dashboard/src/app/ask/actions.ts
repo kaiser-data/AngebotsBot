@@ -1,6 +1,7 @@
 "use server";
 
 import { isConfigured, llm, MODEL } from "@/lib/llm";
+import { effectiveDiscount } from "@/lib/offerSanity";
 import { supabase } from "@/lib/supabase";
 
 export type AskedOffer = {
@@ -27,23 +28,20 @@ export type AskResult = {
   error: string;
 };
 
-const MAX_CANDIDATES = 80;
+const MAX_CANDIDATES = 40;
 const MAX_CITATIONS = 12;
+const SIMILARITY_CUTOFF = 0.45;
+/** Public endpoint that spends LLM tokens — keep questions question-sized. */
+const MAX_QUESTION_CHARS = 300;
 
-const KEYWORD_SYSTEM = `Du extrahierst deutsche Such-Stichwörter aus einer Nutzerfrage über Supermarkt-Angebote.
-
-Antworte ausschließlich mit JSON: {"keywords": ["...","..."]}.
-
-Regeln:
-- 1 bis 5 Stichwörter, jeweils ein einzelnes Wort oder ein kurzer Stamm (z. B. "wasser", "joghurt", "bio").
-- Keine Stoppwörter ("die", "der", "wo", "günstig", "billig", "vergleich").
-- Stamm-Form bevorzugt: "wasser" statt "Wassersorten", "joghurt" statt "Joghurts".
-- Bei Markenfragen: Marke direkt, z. B. "ariel", "ferrero".`;
+/** Search infrastructure failed — distinct from "searched, found nothing". */
+class SearchUnavailable extends Error {}
 
 const ANSWER_SYSTEM = `Du bist ein hilfreicher Berater für deutsche Supermarkt-Angebote.
 
 Du bekommst eine Frage und eine Liste passender Angebote (id, title, store, price, original_price, discount_percent, category).
 Beantworte die Frage präzise auf Deutsch, in maximal 6 Sätzen oder einer kurzen Liste.
+Sprich den Nutzer mit "du" an. Schreibe Preise im deutschen Format mit Leerzeichen vor dem Euro-Zeichen ("13,99 €") und Rabatte als ganze Prozent ("28 %").
 
 Wenn der Nutzer Angebote vergleichen will:
 - Nenne konkrete Preise mit Markt-Name.
@@ -72,56 +70,74 @@ function safeJson<T>(raw: string, fallback: T): T {
   }
 }
 
-async function extractKeywords(question: string): Promise<string[]> {
-  const res = await llm.chat.completions.create({
-    model: MODEL,
-    temperature: 0,
-    messages: [
-      { role: "system", content: KEYWORD_SYSTEM },
-      { role: "user", content: question },
-    ],
-    response_format: { type: "json_object" },
+async function embedQuery(question: string): Promise<number[]> {
+  const { data, error } = await supabase.functions.invoke("generate-embedding", {
+    body: { text: question },
   });
-  const content = res.choices[0]?.message?.content ?? "{}";
-  const parsed = safeJson<{ keywords?: string[] }>(content, {});
-  return (parsed.keywords ?? [])
-    .map((k) => k.trim().toLowerCase())
-    .filter((k) => k.length >= 2 && k.length <= 40)
-    .slice(0, 5);
+  if (error) {
+    console.error("[ask] generate-embedding failed:", error);
+    throw new SearchUnavailable("embedding");
+  }
+  const embedding = (data as { embedding?: number[] } | null)?.embedding;
+  if (!Array.isArray(embedding) || embedding.length !== 384) {
+    console.error("[ask] unexpected embedding payload:", data);
+    throw new SearchUnavailable("embedding payload");
+  }
+  return embedding;
 }
 
-async function fetchCandidates(keywords: string[]): Promise<AskedOffer[]> {
-  if (!keywords.length) return [];
-  // ilike OR across all keywords against title.
-  const orFilter = keywords
-    .map((k) => `title.ilike.%${k.replace(/[%,]/g, "")}%`)
-    .join(",");
-  const { data, error } = await supabase
-    .from("offers")
-    .select("id, title, store, price, original_price, discount_percent, image_url, url, category")
-    .eq("is_active", true)
-    .or(orFilter)
-    .order("discount_percent", { ascending: false, nullsFirst: false })
-    .limit(MAX_CANDIDATES);
+async function semanticSearch(question: string): Promise<AskedOffer[]> {
+  const embedding = await embedQuery(question);
+
+  const { data, error } = await supabase.rpc("search_offers", {
+    query_embedding: embedding,
+    similarity_cutoff: SIMILARITY_CUTOFF,
+    max_price_filter: null,
+    category_filter: null,
+    result_limit: MAX_CANDIDATES,
+  });
   if (error) {
-    console.error("[ask] supabase or-query failed:", error);
-    return [];
+    console.error("[ask] search_offers RPC failed:", error);
+    throw new SearchUnavailable("search_offers");
   }
-  return (data ?? []) as AskedOffer[];
+
+  const rows = (data ?? []) as Array<{
+    offer_id: string;
+    title: string;
+    store: string | null;
+    price: number | null;
+    original_price: number | null;
+    discount_percent: number | null;
+    image_url: string | null;
+    url: string;
+    category: string | null;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.offer_id,
+    title: r.title,
+    store: r.store,
+    price: r.price,
+    original_price: r.original_price,
+    discount_percent: r.discount_percent,
+    image_url: r.image_url,
+    url: r.url,
+    category: r.category,
+  }));
 }
 
 async function answerWithCitations(
   question: string,
   candidates: AskedOffer[],
 ): Promise<{ answer: string; citedIds: string[] }> {
-  // Slim the payload — long descriptions would burn tokens.
   const slimmed = candidates.map((o) => ({
     id: o.id,
     title: o.title,
     store: o.store,
     price: o.price,
     original_price: o.original_price,
-    discount_percent: o.discount_percent,
+    // Same whole-percent value the badge shows, so the answer and the card agree.
+    discount_percent: effectiveDiscount(o.price, o.original_price, o.discount_percent),
     category: o.category,
   }));
 
@@ -146,34 +162,39 @@ async function answerWithCitations(
 }
 
 export async function askOffers(question: string): Promise<AskResult> {
-  const q = question.trim();
+  const q = (question ?? "").trim().replace(/\s+/g, " ");
   if (!q) return { ok: false, error: "Bitte eine Frage eingeben." };
-  if (!isConfigured()) return { ok: false, error: "GEMINI_API_KEY ist nicht gesetzt." };
+  if (q.length > MAX_QUESTION_CHARS) {
+    return { ok: false, error: `Bitte kürzer fragen (max. ${MAX_QUESTION_CHARS} Zeichen).` };
+  }
+  if (!isConfigured()) {
+    return { ok: false, error: "Die Frage-Funktion ist gerade nicht eingerichtet." };
+  }
 
   try {
-    const keywords = await extractKeywords(q);
-    const candidates = await fetchCandidates(keywords);
+    const candidates = await semanticSearch(q);
     if (candidates.length === 0) {
       return {
         ok: true,
         question: q,
-        keywords,
-        answer: keywords.length
-          ? `Keine aktiven Angebote zu **${keywords.join(", ")}** gefunden.`
-          : "Konnte keine Stichwörter aus der Frage ableiten.",
+        keywords: ["semantisch"],
+        answer:
+          "Dazu habe ich keine aktuellen Angebote gefunden. Versuch es mit einem allgemeineren Begriff (z. B. „Kaffee“ statt einer bestimmten Sorte).",
         citedOffers: [],
         candidateCount: 0,
       };
     }
 
     const { answer, citedIds } = await answerWithCitations(q, candidates);
-    const citedSet = new Set(citedIds);
-    const cited = candidates.filter((o) => citedSet.has(o.id));
+    const citedSet = new Set(citedIds.map(String));
+    // Keep the LLM's order, and never show an id it invented.
+    const byId = new Map(candidates.map((o) => [o.id, o]));
+    const cited = [...citedSet].flatMap((id) => byId.get(id) ?? []);
 
     return {
       ok: true,
       question: q,
-      keywords,
+      keywords: ["semantisch"],
       answer,
       citedOffers: cited,
       candidateCount: candidates.length,
@@ -181,6 +202,13 @@ export async function askOffers(question: string): Promise<AskResult> {
   } catch (exc) {
     const msg = exc instanceof Error ? exc.message : String(exc);
     console.error("[ask] failed:", msg);
-    return { ok: false, error: msg };
+    // Raw provider errors ("429 RESOURCE_EXHAUSTED …") mean nothing to shoppers.
+    return {
+      ok: false,
+      error:
+        exc instanceof SearchUnavailable
+          ? "Die Angebotssuche ist gerade nicht erreichbar. Bitte gleich nochmal versuchen."
+          : "Die Antwort konnte gerade nicht erstellt werden. Bitte gleich nochmal versuchen.",
+    };
   }
 }

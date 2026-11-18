@@ -5,7 +5,8 @@ Uses the httpx-only KaufdaJsonScraper (no Playwright) so it runs cheaply on
 GitHub Actions. Steps:
 
   1. Scrape all keywords from kaufDA's JSON-embedded brochure pages.
-  2. Upsert into Supabase `offers` + append a `price_history` row per offer.
+  2. Upsert into Supabase `offers` + append a `price_history` row per offer
+     whose price changed (or wasn't recorded in the last HISTORY_RESAMPLE_DAYS).
   3. Optionally run the LLM categorizer over newly-seen offers.
 
 Usage:
@@ -21,7 +22,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from providers.supabase_client import get_supabase
 from scraper.kaufda_json import KaufdaJsonScraper
@@ -33,6 +34,75 @@ logging.basicConfig(
 logger = logging.getLogger("run_scrape")
 
 BATCH = 50
+
+# kaufDA prices change with the weekly brochure, not daily. Storing the same
+# price every day multiplied price_history ~7x and filled the 500 MB free plan.
+# A row is written when the price changes, or at least once per this window so
+# the 90-day deal score keeps enough observations.
+HISTORY_RESAMPLE_DAYS = 7
+
+
+def _price_key(row: dict) -> tuple:
+    """Comparable (price, loyalty_price) — numeric strings and floats alike."""
+    def norm(v):
+        if v is None:
+            return None
+        try:
+            return round(float(v), 2)
+        except (TypeError, ValueError):
+            return v
+    return (norm(row.get("price")), norm(row.get("loyalty_price")))
+
+
+def select_history_rows(returned: list[dict], recent: list[dict], now: datetime) -> list[dict]:
+    """price_history rows worth storing for one upserted chunk.
+
+    `recent` = existing price_history rows (offer_id, price, loyalty_price,
+    observed_at) from the last HISTORY_RESAMPLE_DAYS for these offers. An offer
+    is skipped when its current price was already recorded in that window.
+    Offers without a price are never recorded (nothing to chart).
+    """
+    seen: dict[str, set] = {}
+    for r in recent:
+        seen.setdefault(r.get("offer_id"), set()).add(_price_key(r))
+
+    rows = []
+    for r in returned:
+        if r.get("price") is None and r.get("loyalty_price") is None:
+            continue
+        if _price_key(r) in seen.get(r["id"], set()):
+            continue
+        rows.append({
+            "offer_id":         r["id"],
+            "external_id":      r["external_id"],
+            "price":            r.get("price"),
+            "loyalty_price":    r.get("loyalty_price"),
+            "original_price":   r.get("original_price"),
+            "discount_percent": r.get("discount_percent"),
+            "store":            r.get("store"),
+            "category":         r.get("category"),
+            "observed_at":      now.isoformat(),
+        })
+    return rows
+
+
+def _recent_history(sb, offer_ids: list[str], now: datetime) -> list[dict]:
+    """Recent price_history rows for these offers; [] on error (then we just write)."""
+    if not offer_ids:
+        return []
+    since = (now - timedelta(days=HISTORY_RESAMPLE_DAYS)).isoformat()
+    try:
+        res = (
+            sb.table("price_history")
+            .select("offer_id, price, loyalty_price")
+            .in_("offer_id", offer_ids)
+            .gte("observed_at", since)
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("price_history lookup failed (%s) — writing all rows", exc)
+        return []
 
 
 def _upsert_chunk(sb, chunk: list[dict], attempt: int = 0) -> list[dict]:
@@ -90,9 +160,12 @@ def _iso_to_date(value):
         return value[:10]
 
 
-def upsert_offers(offers: list[dict]) -> int:
+def upsert_offers(offers: list[dict]) -> list[dict]:
+    """Batch-upsert offers + price_history. Returns successfully upserted rows."""
     sb = get_supabase()
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    history_written = 0
     write_taxonomy = has_column(sb, "offers", "kaufda_category")
     rows: list[dict] = []
     for offer in offers:
@@ -124,7 +197,7 @@ def upsert_offers(offers: list[dict]) -> int:
             row["kaufda_category_path"] = offer.get("kaufda_category_path")
         rows.append(row)
 
-    inserted = 0
+    all_returned: list[dict] = []
     failed = 0
     for i in range(0, len(rows), BATCH):
         chunk = rows[i:i + BATCH]
@@ -136,32 +209,25 @@ def upsert_offers(offers: list[dict]) -> int:
             logger.error("Giving up on chunk %d–%d: %s", i, i + len(chunk), exc)
             failed += len(chunk)
             continue
-        inserted += len(chunk)
-        # Append a price_history row per offer for the dashboard's deal score.
-        # We need the offer_id from the upsert response since external_id isn't
-        # the PK on price_history.
-        history_rows = []
-        for r in returned:
-            history_rows.append({
-                "offer_id":         r["id"],
-                "external_id":      r["external_id"],
-                "price":            r.get("price"),
-                "loyalty_price":    r.get("loyalty_price"),
-                "original_price":   r.get("original_price"),
-                "discount_percent": r.get("discount_percent"),
-                "store":            r.get("store"),
-                "category":         r.get("category"),
-                "observed_at":      now,
-            })
+        all_returned.extend(returned)
+        # price_history for the deal score — only when the price is new
+        # (see HISTORY_RESAMPLE_DAYS). offer_id comes from the upsert response.
+        recent = _recent_history(sb, [r["id"] for r in returned], now_dt)
+        history_rows = select_history_rows(returned, recent, now_dt)
         if history_rows:
             try:
                 sb.table("price_history").insert(history_rows).execute()
+                history_written += len(history_rows)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("price_history insert failed for chunk: %s", exc)
-        logger.info("  upserted %d/%d", inserted, len(rows))
+        logger.info("  upserted %d/%d", len(all_returned), len(rows))
     if failed:
         logger.error("Failed to upsert %d/%d rows", failed, len(rows))
-    return inserted
+    logger.info(
+        "price_history: %d new rows (%d unchanged prices skipped)",
+        history_written, len(all_returned) - history_written,
+    )
+    return all_returned
 
 
 async def main_async(args: argparse.Namespace) -> int:
@@ -176,11 +242,26 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.warning("No offers scraped — bailing out before upsert.")
         return 1
 
-    upserted = upsert_offers(offers)
-    logger.info("Upserted %d offers into Supabase", upserted)
-    if upserted == 0:
+    returned = upsert_offers(offers)
+    logger.info("Upserted %d offers into Supabase", len(returned))
+    if not returned:
         logger.error("Every upsert chunk failed — treating run as failed.")
         return 1
+
+    # Drain embedding_queue so bulk inserts don't leave semantic search empty.
+    try:
+        from providers.embeddings import drain_embedding_queue
+        drained = 0
+        # Cap loops so a huge backlog can't blow the Actions budget.
+        for _ in range(20):
+            n = drain_embedding_queue(limit=200)
+            drained += n
+            if n == 0:
+                break
+        if drained:
+            logger.info("Drained %d embedding_queue jobs", drained)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("embedding drain skipped: %s", exc)
 
     if args.categorize:
         # Lazy-import to keep the dry-run path light.

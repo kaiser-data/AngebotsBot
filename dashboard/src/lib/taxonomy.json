@@ -1,0 +1,92 @@
+{
+  "buckets": [
+    "Lebensmittel",
+    "Getränke",
+    "Drogerie & Kosmetik",
+    "Haushalt & Reinigung",
+    "Baby & Kind",
+    "Tier",
+    "Garten & Heimwerken",
+    "Elektronik & Multimedia",
+    "Mode, Sport & Freizeit",
+    "Sonstiges"
+  ],
+  "subcategories": {
+    "Lebensmittel": [
+      "Obst & Gemüse",
+      "Fleisch & Wurst",
+      "Fisch",
+      "Milchprodukte & Käse",
+      "Brot & Backwaren",
+      "Süßwaren & Snacks",
+      "Tiefkühl",
+      "Grundnahrung & Konserven"
+    ],
+    "Getränke": [
+      "Wasser & Säfte",
+      "Bier",
+      "Wein & Sekt",
+      "Spirituosen",
+      "Kaffee & Tee"
+    ],
+    "Drogerie & Kosmetik": [
+      "Körperpflege",
+      "Kosmetik & Make-up",
+      "Gesundheit & Apotheke",
+      "Parfum & Düfte"
+    ],
+    "Haushalt & Reinigung": [
+      "Waschmittel",
+      "Reinigung",
+      "Küchenbedarf",
+      "Aufbewahrung"
+    ],
+    "Baby & Kind": [
+      "Windeln & Pflege",
+      "Baby-Nahrung",
+      "Spielzeug"
+    ],
+    "Tier": [
+      "Hund",
+      "Katze",
+      "Sonstige Tiere"
+    ],
+    "Garten & Heimwerken": [
+      "Pflanzen & Garten",
+      "Gartenwerkzeug",
+      "Werkzeug & Heimwerken",
+      "Farbe & Bauchemie",
+      "Gartenmöbel"
+    ],
+    "Elektronik & Multimedia": [
+      "Smartphone & Tablet",
+      "Computer & Drucker",
+      "TV & Audio",
+      "Haushaltsgeräte",
+      "Sonstige Elektronik"
+    ],
+    "Mode, Sport & Freizeit": [
+      "Kleidung & Schuhe",
+      "Sport & Fitness",
+      "Outdoor",
+      "Spielzeug & Hobby"
+    ],
+    "Sonstiges": [
+      "Auto & Mobilität",
+      "Büro & Schreibwaren",
+      "Sonstige"
+    ]
+  },
+  "fallback_subcategory": {
+    "Lebensmittel": "Grundnahrung & Konserven",
+    "Getränke": "Wasser & Säfte",
+    "Drogerie & Kosmetik": "Körperpflege",
+    "Haushalt & Reinigung": "Reinigung",
+    "Baby & Kind": "Spielzeug",
+    "Tier": "Sonstige Tiere",
+    "Garten & Heimwerken": "Werkzeug & Heimwerken",
+    "Elektronik & Multimedia": "Sonstige Elektronik",
+    "Mode, Sport & Freizeit": "Kleidung & Schuhe",
+    "Sonstiges": "Sonstige"
+  }
+}

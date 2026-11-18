@@ -11,6 +11,15 @@ from workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
 
+KNOWN_INTENTS = frozenset({
+    "scrape",
+    "query",
+    "compare",
+    "set_alert",
+    "list_alerts",
+    "delete_alert",
+})
+
 ROUTER_SYSTEM = """\
 Du bist ein Intent-Klassifikator für AngebotsBot, einen deutschen Angebots-Scanner.
 Klassifiziere die Nutzeranfrage in GENAU EINEN der folgenden Intents:
@@ -28,6 +37,12 @@ Antworte NUR als JSON: {"intent": "<intent>"}"""
 
 def router_node(state: AgentState) -> dict:
     """Classify user_query and write intent back to state."""
+    # Command paths (Telegram handlers, scheduler) already set a concrete intent —
+    # do not spend an LLM call re-classifying.
+    preset = state.get("intent")
+    if preset in KNOWN_INTENTS:
+        return {"intent": preset}
+
     query = state.get("user_query", "")
     if not query:
         return {"intent": "unknown"}
@@ -36,7 +51,9 @@ def router_node(state: AgentState) -> dict:
     q_lower = query.lower()
     if any(w in q_lower for w in ["lade", "aktualisiere", "neue angebote", "scan", "scrape"]):
         return {"intent": "scrape"}
-    if any(w in q_lower for w in ["vergleich", "unterschied", "welch", "besser"]):
+    # Require explicit compare language — bare "welch*" matches normal questions
+    # like "Welche Angebote gibt es?" and must not force the compare path.
+    if any(w in q_lower for w in ["vergleich", "unterschied", "besser", "welche ist"]):
         return {"intent": "compare"}
     if any(w in q_lower for w in ["benachrichtig", "alert", "erinner", "sobald"]):
         if any(w in q_lower for w in ["lösch", "entfern", "deaktiviere"]):
@@ -60,7 +77,7 @@ def router_node(state: AgentState) -> dict:
         if match:
             data = json.loads(match.group())
             intent = data.get("intent", "unknown")
-            if intent in ("scrape", "query", "compare", "set_alert", "list_alerts", "delete_alert"):
+            if intent in KNOWN_INTENTS:
                 return {"intent": intent}
     except Exception as exc:
         logger.warning("Router LLM call failed: %s", exc)

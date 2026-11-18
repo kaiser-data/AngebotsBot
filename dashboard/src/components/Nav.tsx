@@ -40,10 +40,12 @@ function isActive(pathname: string, href: string) {
 
 export function Nav() {
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
-
-  // Close the drawer whenever the route changes.
-  useEffect(() => setOpen(false), [pathname]);
+  // The drawer remembers which page it was opened on, so it closes by itself
+  // when the route changes — no effect needed.
+  const [openOn, setOpenOn] = useState<string | null>(null);
+  const open = openOn === pathname;
+  const setOpen = (next: boolean | ((v: boolean) => boolean)) =>
+    setOpenOn((typeof next === "function" ? next(open) : next) ? pathname : null);
 
   // Prevent body scroll while the drawer is open on mobile.
   useEffect(() => {

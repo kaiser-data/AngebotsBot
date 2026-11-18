@@ -88,17 +88,23 @@ Deno.serve(async (_req: Request): Promise<Response> => {
       byUser.set(alert.user_id, list);
     }
 
+    // Batch-load users (avoid N+1 .single() per user)
+    const userIds = [...byUser.keys()];
+    const { data: usersData, error: usersErr } = await sb
+      .from("users")
+      .select("*")
+      .in("id", userIds);
+    if (usersErr) throw new Error(`Failed to load users: ${usersErr.message}`);
+    const usersById = new Map<string, User>();
+    for (const u of (usersData ?? []) as User[]) {
+      usersById.set(u.id, u);
+    }
+
     const summary: Record<string, unknown> = {};
 
     // 3. Process each user
     for (const [userId, userAlerts] of byUser) {
-      const { data: userData } = await sb
-        .from("users")
-        .select("*")
-        .eq("id", userId)
-        .single();
-
-      const user = userData as User | null;
+      const user = usersById.get(userId) ?? null;
       if (!user) continue;
       if (!user.telegram_chat_id && !user.email) continue;
 

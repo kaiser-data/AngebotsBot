@@ -17,14 +17,16 @@ def test_embed_text_returns_zero_vector_for_blank_input():
 @patch("providers.embeddings.get_supabase")
 def test_embed_text_parses_byte_response(get_supabase_mock):
     sb = MagicMock()
-    sb.functions.invoke.return_value = json.dumps({"embedding": [1.0] * 384}).encode()
+    sb.functions.invoke.return_value = json.dumps(
+        {"embedding": [1.0] * 384, "embeddings": [[1.0] * 384]}
+    ).encode()
     get_supabase_mock.return_value = sb
 
     result = embeddings.embed_text("kaffee")
 
     sb.functions.invoke.assert_called_once_with(
         "generate-embedding",
-        invoke_options={"body": {"text": "kaffee"}},
+        invoke_options={"body": {"texts": ["kaffee"]}},
     )
     assert result == [1.0] * 384
 
@@ -32,7 +34,10 @@ def test_embed_text_parses_byte_response(get_supabase_mock):
 @patch("providers.embeddings.get_supabase")
 def test_embed_text_returns_embedding_from_dict_response(get_supabase_mock):
     sb = MagicMock()
-    sb.functions.invoke.return_value = {"embedding": [0.5] * 384}
+    sb.functions.invoke.return_value = {
+        "embedding": [0.5] * 384,
+        "embeddings": [[0.5] * 384],
+    }
     get_supabase_mock.return_value = sb
 
     result = embeddings.embed_text("tee")
@@ -43,7 +48,7 @@ def test_embed_text_returns_embedding_from_dict_response(get_supabase_mock):
 @patch("providers.embeddings.get_supabase")
 def test_embed_text_returns_zero_vector_for_invalid_length(get_supabase_mock):
     sb = MagicMock()
-    sb.functions.invoke.return_value = {"embedding": [1.0, 2.0]}
+    sb.functions.invoke.return_value = {"embeddings": [[1.0, 2.0]]}
     get_supabase_mock.return_value = sb
 
     assert embeddings.embed_text("kaffee") == [0.0] * 384
@@ -54,13 +59,73 @@ def test_embed_text_returns_zero_vector_on_error(_get_supabase_mock):
     assert embeddings.embed_text("kaffee") == [0.0] * 384
 
 
-@patch("providers.embeddings.embed_text", side_effect=[[1.0] * 384, [2.0] * 384])
-def test_embed_batch_calls_embed_text_for_each_item(embed_text_mock):
+@patch("providers.embeddings.get_supabase")
+def test_embed_batch_sends_texts_in_one_invoke(get_supabase_mock):
+    sb = MagicMock()
+    sb.functions.invoke.return_value = {
+        "embeddings": [[1.0] * 384, [2.0] * 384],
+    }
+    get_supabase_mock.return_value = sb
+
     result = embeddings.embed_batch(["a", "b"])
 
+    sb.functions.invoke.assert_called_once_with(
+        "generate-embedding",
+        invoke_options={"body": {"texts": ["a", "b"]}},
+    )
     assert result == [[1.0] * 384, [2.0] * 384]
-    assert [call.args[0] for call in embed_text_mock.call_args_list] == ["a", "b"]
 
+
+@patch("providers.embeddings.get_supabase")
+def test_drain_embedding_queue_updates_and_deletes(get_supabase_mock):
+    sb = MagicMock()
+    queue_select = MagicMock()
+    queue_select.select.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[
+            {
+                "id": 1,
+                "table_name": "offers",
+                "record_id": "uuid-1",
+                "field": "embedding",
+                "text": "Milch Lidl",
+            }
+        ]
+    )
+    offers_table = MagicMock()
+    delete_table = MagicMock()
+
+    def table_side_effect(name):
+        if name == "embedding_queue":
+            # first call: select chain; later: delete
+            if not hasattr(table_side_effect, "calls"):
+                table_side_effect.calls = 0
+            table_side_effect.calls += 1
+            if table_side_effect.calls == 1:
+                return queue_select
+            return delete_table
+        return offers_table
+
+    sb.table.side_effect = table_side_effect
+    sb.functions.invoke.return_value = {"embeddings": [[0.1] * 384]}
+    get_supabase_mock.return_value = sb
+
+    n = embeddings.drain_embedding_queue(limit=10)
+
+    assert n == 1
+    offers_table.update.assert_called_once()
+    delete_table.delete.assert_called_once()
+
+
+@patch("providers.embeddings.embed_text", side_effect=[[1.0] * 384, [2.0] * 384])
+def test_embed_batch_legacy_removed(_embed_text_mock):
+    """Guard: embed_batch must not fan out to embed_text."""
+    with patch("providers.embeddings.get_supabase") as get_sb:
+        get_sb.return_value.functions.invoke.return_value = {
+            "embeddings": [[1.0] * 384, [2.0] * 384],
+        }
+        result = embeddings.embed_batch(["a", "b"])
+    assert result == [[1.0] * 384, [2.0] * 384]
+    _embed_text_mock.assert_not_called()
 
 @patch("providers.llm.ChatOpenAI")
 def test_get_llm_builds_cached_chat_client(chat_openai_mock):
@@ -105,7 +170,7 @@ def test_get_supabase_builds_cached_client(create_client_mock):
 
     create_client_mock.assert_called_once_with(
         supabase_provider.config.SUPABASE_URL,
-        supabase_provider.config.SUPABASE_ANON_KEY,
+        supabase_provider.config.SUPABASE_SERVICE_ROLE_KEY,
     )
     assert first is client
     assert second is client

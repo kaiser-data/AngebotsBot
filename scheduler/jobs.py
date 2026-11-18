@@ -22,7 +22,7 @@ _scheduler: AsyncIOScheduler | None = None
 
 async def weekly_scrape_job() -> None:
     """
-    1. Run the full scrape → vision → store pipeline.
+    1. Run the JSON scrape → batch-store pipeline (same path as interactive scrape).
     2. Invoke the Supabase weekly-digest Edge Function.
     """
     logger.info("Weekly scrape job started...")
@@ -34,7 +34,7 @@ async def weekly_scrape_job() -> None:
     state: AgentState = {
         "messages":        [],
         "user_query":      "Lade neue Angebote",
-        "intent":          "scrape",
+        "intent":          "scrape",  # router short-circuits — no LLM classify
         "scrape_requested": True,
         "scraped_offers":  [],
         "scrape_errors":   [],
