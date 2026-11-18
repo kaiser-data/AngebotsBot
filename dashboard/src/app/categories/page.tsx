@@ -255,7 +255,7 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
                 {ICONS[b]}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{b}</div>
+                <div className="text-sm font-medium leading-snug">{b}</div>
                 <div className="text-xs tabular-nums text-fg-muted">
                   {n.toLocaleString("de-DE")} Angebote
                 </div>

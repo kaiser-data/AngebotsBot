@@ -42,7 +42,7 @@ export default async function StoresPage({ searchParams }: { searchParams: Searc
         title="Märkte vergleichen"
         subtitle={
           week
-            ? `Gültig in ${week.label.toLowerCase()} (${week.from.toLocaleDateString("de-DE")} – ${week.to.toLocaleDateString("de-DE")}). Suche per Stichwort.`
+            ? `${week.label}, ${week.from.toLocaleDateString("de-DE")} – ${week.to.toLocaleDateString("de-DE")}. Such ein Produkt und sieh, welcher Markt es am günstigsten hat.`
             : "Über alle aktiven Angebote hinweg. Suche per Stichwort."
         }
       />

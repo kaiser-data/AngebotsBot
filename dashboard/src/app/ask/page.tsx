@@ -30,8 +30,8 @@ export default function AskPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="LLM-Suche"
-        subtitle="Stell eine Frage zu den aktuellen Angeboten. Die Antwort verweist auf konkrete Treffer aus der Datenbank."
+        title="Frag den AngebotsBot"
+        subtitle="Stell eine Frage in deinen Worten. Die Antwort nennt Preise und Märkte und verlinkt die passenden Angebote."
       />
 
       <form

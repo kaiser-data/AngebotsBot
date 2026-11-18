@@ -219,8 +219,7 @@ export function OfferRow({
       <div className="min-w-0 flex-1">
         {titleEl}
         <div className="mt-0.5 truncate text-xs text-fg-muted">
-          {store ?? "—"}
-          {meta ? <> · {meta}</> : null}
+          {store && meta ? <>{store} · {meta}</> : (store ?? meta ?? "—")}
         </div>
         <div className="mt-1 sm:hidden">
           <PriceTag price={price} original={originalPrice} discount={discountPercent} title={title} size="sm" />
