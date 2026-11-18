@@ -35,7 +35,9 @@ const HARD_RULES: ReadonlyArray<readonly [Bucket, string, RegExp]> = [
    /\b(?:frosch|ajax|febreze|ecover|sagrotan|domestos|finish|somat)\b/i],
 
   // Cat food brands
-  ["Tier", "Katze", /\b(?:felix|whiskas|sheba|gourmet|kitekat|catsan)\b/i],
+  // "Gourmet" alone is too generic ("Gourmet Burger") — only its cat-food lines.
+  ["Tier", "Katze",
+   /\b(?:felix|whiskas|sheba|kitekat|catsan|gourmet[\s-]+(?:gold|perle|a la carte|mon petit|revolution))\b/i],
   // Dog food brands
   ["Tier", "Hund", /\b(?:pedigree|frolic|chappi|cesar|rinti)\b/i],
 
@@ -45,7 +47,10 @@ const HARD_RULES: ReadonlyArray<readonly [Bucket, string, RegExp]> = [
 
   // Snack/chip/sweets brands
   ["Lebensmittel", "Süßwaren & Snacks",
-   /\b(?:funny[\s-]*frisch|chio|lay'?s|pringles|ferrero|milka|ritter[\s-]*sport|haribo|amicelli|m&m'?s|kinder)\b/i],
+   /\b(?:funny[\s-]*frisch|chio|lay'?s|pringles|ferrero|milka|ritter[\s-]*sport|haribo|amicelli|m&m'?s)\b/i],
+  // Ferrero's "Kinder" line only — not "Kinder-Fahrrad" or "Kinderschuhe".
+  ["Lebensmittel", "Süßwaren & Snacks",
+   /\bkinder[\s-]+(?:schokolade|riegel|bueno|country|pingui|maxi|überraschung|happy hippo|joy|delice|milchschnitte|cards|choco)/i],
 
   // Alcohol brands → Getränke
   ["Getränke", "Spirituosen",
@@ -84,12 +89,12 @@ const TITLE_RULES: readonly Rule[] = [
   ["Garten & Heimwerken", "Gartenwerkzeug",
     ["rasenmäher", "rasenmaeher", "heckenschere", "akku-heckenschere", "akku-rasenmäher",
      "akku-rasenmaeher", "kettensäge", "kettensaege", "akku-kettensäge", "astschere",
-     "gartenschere", "laubbläser", "vertikutierer", "akku-bohrschrauber"]],
+     "gartenschere", "laubbläser", "vertikutierer", "akku-bohrschrauber", "gartenschlauch"]],
   ["Garten & Heimwerken", "Pflanzen & Garten",
-    ["pflanze", "blume ", "azalee", "samen", "dünger", "duenger", "rasensaat", "blumenkasten"]],
+    ["pflanze", "blume ", "azalee", "samen", "dünger", "duenger", "rasensaat", "blumenkasten", "blumenerde", "pflanzerde", "orchidee"]],
   ["Garten & Heimwerken", "Gartenmöbel",
     ["ampelschirm", "faltpavillon", "feuerschale", "gartenstuhl", "gartentisch",
-     "auflagenbox", "abdeckhaube", "anzündkamin", "anzuendkamin", "briketts", "grill"]],
+     "auflagenbox", "abdeckhaube", "anzündkamin", "anzuendkamin", "briketts", "grill", "holzkohle"]],
   ["Garten & Heimwerken", "Farbe & Bauchemie",
     ["wandfarbe", "lack", "alpina", "farbroller", "silikon", "klebstoff", "fliese"]],
   ["Garten & Heimwerken", "Werkzeug & Heimwerken",
@@ -109,21 +114,21 @@ const TITLE_RULES: readonly Rule[] = [
     ["staubsauger", "saugroboter", "waschmaschine", "trockner", "geschirrspüler",
      "geschirrspueler", "fritteuse", "mixer", "toaster", "wasserkocher", "kaffeevollautomat",
      "siebträger", "siebtraeger", "mikrowelle", "backofen", "kühlschrank", "kuehlschrank",
-     "gefrierschrank", "klimaanlage"]],
+     "gefrierschrank", "klimaanlage", "airfryer", "heißluftfritteuse"]],
   ["Elektronik & Multimedia", "Sonstige Elektronik",
     ["ladegerät", "ladegeraet", "powerbank", "akku ", "fernglas", "dartscheibe"]],
 
   // Mode, Sport & Freizeit
   ["Mode, Sport & Freizeit", "Sport & Fitness",
-    ["fitness", "yoga", "hantel", "fussball", "fußball", "tennis", "basketball",
+    ["fitness", "yoga", "hantel", "yogamatte", "fussball", "fußball", "tennis", "basketball",
      "trikot", "sportflasche"]],
   ["Mode, Sport & Freizeit", "Outdoor",
     ["outdoor", "wanderschuh", "rucksack", "zelt", "schlafsack", "camping"]],
   ["Mode, Sport & Freizeit", "Spielzeug & Hobby",
     ["fahrrad", "e-bike", "elektrofahrrad", "e-scooter", "scooter", "rollschuh", "skate"]],
   ["Mode, Sport & Freizeit", "Kleidung & Schuhe",
-    ["kleid ", "hose ", "jacke", "schuh", "schal", "mütze", "muetze", "handschuh",
-     "socken", "t-shirt", "bikini", "bademantel", "fleecedecke"]],
+    ["kleid ", "hose ", "jacke", "schuh", "schal ", "mütze", "muetze", "handschuh",
+     "socken", "t-shirt", "jeans", "sneaker", "bikini", "bademantel", "fleecedecke"]],
 
   // Drogerie & Kosmetik
   ["Drogerie & Kosmetik", "Parfum & Düfte",
@@ -136,19 +141,20 @@ const TITLE_RULES: readonly Rule[] = [
      "nagellack"]],
   ["Drogerie & Kosmetik", "Körperpflege",
     ["shampoo", "duschgel", "duschbad", "seife", "bodylotion", "creme", "zahnpasta",
-     "haarspray", "after-shave", "after-sun", "rasierer", "deospray", "deoroller"]],
+     "haarspray", "after-shave", "after-sun", "sonnenmilch", "sonnenspray",
+     "sonnencreme", "reinigungsmilch", "bodymilk", "serum", "rasierer", "deospray", "deoroller", "zahnbürste", "rasierklinge", "haarfarbe", "haarspülung", "taschentücher"]],
 
   // Haushalt & Reinigung
   ["Haushalt & Reinigung", "Waschmittel",
     ["waschmittel", "waschpulver", "weichspüler", "weichspueler", "fleckensalz"]],
   ["Haushalt & Reinigung", "Reinigung",
     ["allzweckreiniger", "wc-reiniger", "glasreiniger", "scheuermilch", "spülmittel",
-     "spuelmittel", "fensterputz"]],
+     "spuelmittel", "fensterputz", "tabs", "toilettenpapier", "küchenrolle"]],
   ["Haushalt & Reinigung", "Küchenbedarf",
     ["geschirr", "besteck", "kochtopf", "pfanne", "auflaufform", "frischhalte",
-     "backblech", "lunchbox"]],
+     "backblech", "lunchbox", "gefrierbeutel", "alufolie"]],
   ["Haushalt & Reinigung", "Aufbewahrung",
-    ["aufbewahr", "müllbeutel", "muellbeutel", "abfalleimer", "abfallsack",
+    ["aufbewahr", "müllbeutel", "muellbeutel", "wäscheklammer", "abfalleimer", "abfallsack",
      "mülleimer", "muelleimer"]],
 
   // Getränke
@@ -159,29 +165,29 @@ const TITLE_RULES: readonly Rule[] = [
   ["Getränke", "Spirituosen",
     ["vodka", "wodka", "gin ", "rum ", "whisky", "whiskey", "likör", "likoer", "tequila"]],
   ["Getränke", "Kaffee & Tee",
-    ["kaffee", "espresso", "kapsel", "filterkaffee", "tee ", "kräutertee", "kraeutertee"]],
+    ["kaffee", "espresso", "kapsel", "jacobs", "tchibo", "dallmayr", "lavazza", "kaffeepads", "filterkaffee", "tee ", "kräutertee", "kraeutertee"]],
   ["Getränke", "Wasser & Säfte",
     ["mineralwasser", "wasser ", "saft", "schorle", "limonade", "eistee", "fassbrause"]],
 
   // Lebensmittel
   ["Lebensmittel", "Tiefkühl",
-    ["tiefkühl", "tiefkuehl", "tk-pizza", "frosta"]],
+    ["tiefkühl", "tiefkuehl", "tk-pizza", "frosta", "pizza", "pommes"]],
   ["Lebensmittel", "Fisch",
     ["lachs", "forelle", "seelachs", "thunfisch", "kabeljau", "fischstäbchen",
      "fischstaebchen", "garnele", "shrimp"]],
   ["Lebensmittel", "Fleisch & Wurst",
-    ["fleisch", "salami", "schinken", "wurst", "hähnchen", "haehnchen", "rinder",
-     "schwein", "putenbrust", "hackfleisch", "bratwurst", "leberwurst"]],
+    ["fleisch", "salami", "schinken", "wurst", "würstchen", "hähnchen", "haehnchen", "rinder",
+     "schwein", "putenbrust", "hackfleisch", "bratwurst", "leberwurst", "fleischkäse", "leberkäse", "kassler", "kotelett", "steak"]],
   ["Lebensmittel", "Milchprodukte & Käse",
     ["mozzarella", "käse", "kaese", "joghurt", "butter ", "milch ", "vollmilch",
      "h-milch", "sahne ", "quark", "frischkäse", "frischkaese", "emmentaler",
-     "gouda", "feta"]],
+     "gouda", "feta", "eier "]],
   ["Lebensmittel", "Brot & Backwaren",
     ["brot ", "brötchen", "broetchen", "baguette", "toast ", "stollen", "lebkuchen",
-     "croissant"]],
+     "croissant", "brezel"]],
   ["Lebensmittel", "Süßwaren & Snacks",
     ["schokolade", "praline", "keks ", "bonbon", "chips ", "salzstang", "gummibär",
-     "gummibaer", "müsliriegel", "muesliriegel", "eis ", "eiscreme"]],
+     "gummibaer", "müsliriegel", "muesliriegel", "eis ", "eiscreme", "lindt", "duplo", "raffaello", "nutella", "nüsse", "erdnüsse", "studentenfutter"]],
   ["Lebensmittel", "Obst & Gemüse",
     ["apfel", "banane", "orange", "zitrone", "kirsche", "erdbeere", "tomate", "gurke",
      "kartoffel", "paprika", "brokkoli", "kohl ", "salat ", "ananas", "avocado"]],
@@ -189,7 +195,7 @@ const TITLE_RULES: readonly Rule[] = [
     ["reis ", "nudeln", "pasta", "spaghetti", "mehl ", "zucker", "salz ", "gewürz",
      "gewuerz", "essig", "öl ", "oel ", "olivenöl", "olivenoel", "ketchup", "senf",
      "müsli", "muesli", "cornflakes", "haferflocken", "honig", "marmelade",
-     "konserve", "antipasti"]],
+     "konserve", "antipasti", "mayonnaise", "konfitüre"]],
 
   // Sonstiges
   ["Sonstiges", "Auto & Mobilität",
@@ -288,21 +294,74 @@ function normalize(s: string | null | undefined): string {
     .trim();
 }
 
-function matchRules(text: string, rules: readonly Rule[]): Classification | null {
+type Keyword = {
+  bucket: Bucket;
+  subcategory: string;
+  k: string;
+  /** "whole word / compound tail only" — never a free substring */
+  bounded: boolean;
+  /** position in the rule list — earlier rules are more specific */
+  order: number;
+};
+
+function compile(rules: readonly Rule[]): Keyword[] {
+  let order = 0;
+  return rules.flatMap(([bucket, subcategory, keywords]) =>
+    keywords.map((kw) => ({
+      bucket,
+      subcategory,
+      k: normalize(kw),
+      // A trailing space in the rule = "whole word only" ("wein " must not
+      // match "Weinbergschnecken", "schal " must not match "Schalotten").
+      bounded: kw.endsWith(" ") || normalize(kw).length <= 4,
+      order: order++,
+    })),
+  );
+}
+
+// Words that end in a product keyword but are never that product.
+const NOT_PRODUCT_WORD = /(?:preis|serum|zentrum|origin)$/;
+
+/** Best keyword for one word: exact match or the longest compound tail. */
+function bestForWord(word: string, rules: readonly Keyword[]): Keyword | null {
+  let best: Keyword | null = null;
+  const tailOk = !NOT_PRODUCT_WORD.test(word);
+  for (const r of rules) {
+    if (r.k.includes(" ")) continue;
+    const hit = word === r.k || (tailOk && r.k.length >= 3 && word.endsWith(r.k));
+    if (hit && (!best || r.k.length > best.k.length)) best = r;
+  }
+  return best;
+}
+
+/**
+ * German puts the head noun LAST in a compound: "Tomatenketchup" is ketchup,
+ * "Blumenkohl" is kohl, "Kartoffelchips" is chips. So, most specific first:
+ *   1. multi-word phrases ("eau de toilette") and, per title word, the exact
+ *      keyword or longest compound tail. Between words, rule order decides.
+ *   2. otherwise a free substring (unbounded keywords > 4 chars), rule order.
+ * Before this, "Tomatenketchup" landed in Obst & Gemüse via "tomate".
+ */
+function matchRules(text: string, rules: readonly Keyword[]): Classification | null {
   if (!text) return null;
   const padded = ` ${text} `;
-  for (const [bucket, subcategory, keywords] of rules) {
-    for (const kw of keywords) {
-      const k = normalize(kw);
-      // Either bounded match (whole word) or contained substring; the rules
-      // are written with that in mind (trailing space = end-of-word anchor).
-      if (padded.includes(` ${k} `) || (k.length > 4 && padded.includes(k))) {
-        return { bucket, subcategory };
-      }
-    }
+  let best: Keyword | null = null;
+  const consider = (r: Keyword | null) => {
+    if (r && (!best || r.order < best.order)) best = r;
+  };
+
+  for (const r of rules) if (r.k.includes(" ") && padded.includes(` ${r.k} `)) consider(r);
+  for (const w of text.split(" ")) if (w) consider(bestForWord(w, rules));
+  if (best) return { bucket: (best as Keyword).bucket, subcategory: (best as Keyword).subcategory };
+
+  for (const r of rules) {
+    if (!r.bounded && text.includes(r.k)) return { bucket: r.bucket, subcategory: r.subcategory };
   }
   return null;
 }
+
+const TITLE_KEYWORDS = compile(TITLE_RULES);
+const CATEGORY_KEYWORDS = compile(CATEGORY_RULES);
 
 /**
  * Classify using title (primary) + kaufda category (fallback).
@@ -324,12 +383,12 @@ export function classify(
 
   // 2. Title-keyword rules on normalized title.
   const normTitle = normalize(title);
-  const titleHit = matchRules(normTitle, TITLE_RULES);
+  const titleHit = matchRules(normTitle, TITLE_KEYWORDS);
   if (titleHit) return titleHit;
 
   // 3. Fallback: normalized kaufda category.
   const normCat = normalize(kaufdaCategory ?? titleOrCategory);
-  const catHit = matchRules(normCat, CATEGORY_RULES);
+  const catHit = matchRules(normCat, CATEGORY_KEYWORDS);
   if (catHit) return catHit;
 
   return { bucket: "Sonstiges", subcategory: "Sonstige" };

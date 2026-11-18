@@ -1,6 +1,7 @@
 import { ArrowLeft, TrendingDown } from "lucide-react";
 import Link from "next/link";
 import { Badge, Card, EmptyState, PageHeader, Stat } from "@/components/ui";
+import { formatEuro } from "@/lib/search";
 import { supabase } from "@/lib/supabase";
 import { PriceSparkline } from "./PriceSparkline";
 
@@ -42,9 +43,7 @@ function pctTone(p: number | null | undefined) {
   return "neutral" as const;
 }
 
-function fmtEUR(v: number | null | undefined) {
-  return v != null ? `${Number(v).toFixed(2)} €` : "—";
-}
+const fmtEUR = formatEuro;
 
 export default async function DealsPage({ searchParams }: { searchParams: SearchParams }) {
   const { offer = "" } = await searchParams;

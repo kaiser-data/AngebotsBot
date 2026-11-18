@@ -87,6 +87,7 @@ export function Badge({
 
 import { AlertTriangle } from "lucide-react";
 import { discountTrust, offerLink } from "@/lib/offerSanity";
+import { formatEuro } from "@/lib/search";
 
 export function PriceTag({
   price,
@@ -107,10 +108,10 @@ export function PriceTag({
 
   return (
     <div className="flex items-baseline gap-2 tabular-nums">
-      <span className={main}>{price != null ? `${price.toFixed(2)} €` : "—"}</span>
-      {original != null && original !== price && trust !== "implausible" && (
+      <span className={main}>{formatEuro(price)}</span>
+      {original != null && (price == null || original > price) && trust !== "implausible" && (
         <span className="text-xs text-fg-subtle line-through">
-          {original.toFixed(2)} €
+          {formatEuro(original)}
         </span>
       )}
       {discount != null && discount > 0 && trust === "trusted" && (

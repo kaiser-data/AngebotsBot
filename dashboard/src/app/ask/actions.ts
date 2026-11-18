@@ -30,6 +30,11 @@ export type AskResult = {
 const MAX_CANDIDATES = 40;
 const MAX_CITATIONS = 12;
 const SIMILARITY_CUTOFF = 0.45;
+/** Public endpoint that spends LLM tokens — keep questions question-sized. */
+const MAX_QUESTION_CHARS = 300;
+
+/** Search infrastructure failed — distinct from "searched, found nothing". */
+class SearchUnavailable extends Error {}
 
 const ANSWER_SYSTEM = `Du bist ein hilfreicher Berater für deutsche Supermarkt-Angebote.
 
@@ -63,25 +68,24 @@ function safeJson<T>(raw: string, fallback: T): T {
   }
 }
 
-async function embedQuery(question: string): Promise<number[] | null> {
+async function embedQuery(question: string): Promise<number[]> {
   const { data, error } = await supabase.functions.invoke("generate-embedding", {
     body: { text: question },
   });
   if (error) {
     console.error("[ask] generate-embedding failed:", error);
-    return null;
+    throw new SearchUnavailable("embedding");
   }
   const embedding = (data as { embedding?: number[] } | null)?.embedding;
   if (!Array.isArray(embedding) || embedding.length !== 384) {
     console.error("[ask] unexpected embedding payload:", data);
-    return null;
+    throw new SearchUnavailable("embedding payload");
   }
   return embedding;
 }
 
 async function semanticSearch(question: string): Promise<AskedOffer[]> {
   const embedding = await embedQuery(question);
-  if (!embedding) return [];
 
   const { data, error } = await supabase.rpc("search_offers", {
     query_embedding: embedding,
@@ -92,7 +96,7 @@ async function semanticSearch(question: string): Promise<AskedOffer[]> {
   });
   if (error) {
     console.error("[ask] search_offers RPC failed:", error);
-    return [];
+    throw new SearchUnavailable("search_offers");
   }
 
   const rows = (data ?? []) as Array<{
@@ -155,9 +159,14 @@ async function answerWithCitations(
 }
 
 export async function askOffers(question: string): Promise<AskResult> {
-  const q = question.trim();
+  const q = (question ?? "").trim().replace(/\s+/g, " ");
   if (!q) return { ok: false, error: "Bitte eine Frage eingeben." };
-  if (!isConfigured()) return { ok: false, error: "GEMINI_API_KEY ist nicht gesetzt." };
+  if (q.length > MAX_QUESTION_CHARS) {
+    return { ok: false, error: `Bitte kürzer fragen (max. ${MAX_QUESTION_CHARS} Zeichen).` };
+  }
+  if (!isConfigured()) {
+    return { ok: false, error: "Die Frage-Funktion ist gerade nicht eingerichtet." };
+  }
 
   try {
     const candidates = await semanticSearch(q);
@@ -166,15 +175,18 @@ export async function askOffers(question: string): Promise<AskResult> {
         ok: true,
         question: q,
         keywords: ["semantisch"],
-        answer: "Keine passenden aktiven Angebote gefunden.",
+        answer:
+          "Dazu habe ich keine aktuellen Angebote gefunden. Versuch es mit einem allgemeineren Begriff (z. B. „Kaffee“ statt einer bestimmten Sorte).",
         citedOffers: [],
         candidateCount: 0,
       };
     }
 
     const { answer, citedIds } = await answerWithCitations(q, candidates);
-    const citedSet = new Set(citedIds);
-    const cited = candidates.filter((o) => citedSet.has(o.id));
+    const citedSet = new Set(citedIds.map(String));
+    // Keep the LLM's order, and never show an id it invented.
+    const byId = new Map(candidates.map((o) => [o.id, o]));
+    const cited = [...citedSet].flatMap((id) => byId.get(id) ?? []);
 
     return {
       ok: true,
@@ -187,6 +199,13 @@ export async function askOffers(question: string): Promise<AskResult> {
   } catch (exc) {
     const msg = exc instanceof Error ? exc.message : String(exc);
     console.error("[ask] failed:", msg);
-    return { ok: false, error: msg };
+    // Raw provider errors ("429 RESOURCE_EXHAUSTED …") mean nothing to shoppers.
+    return {
+      ok: false,
+      error:
+        exc instanceof SearchUnavailable
+          ? "Die Angebotssuche ist gerade nicht erreichbar. Bitte gleich nochmal versuchen."
+          : "Die Antwort konnte gerade nicht erstellt werden. Bitte gleich nochmal versuchen.",
+    };
   }
 }

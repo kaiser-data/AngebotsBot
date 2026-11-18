@@ -27,8 +27,8 @@ export function parseWeek(v: string | undefined | null): WeekKey {
 
 const TZ = "Europe/Berlin";
 
-/** Today's calendar date in Berlin, formatted YYYY-MM-DD. */
-function berlinDate(d: Date): string {
+/** Calendar date in Berlin, formatted YYYY-MM-DD. */
+export function berlinDate(d: Date): string {
   // en-CA conveniently formats as YYYY-MM-DD.
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,

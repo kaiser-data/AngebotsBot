@@ -46,7 +46,10 @@ export default function AskPage() {
           name="q"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Z. B. „Vergleiche aktuelle Wasserangebote“"
+          maxLength={300}
+          aria-label="Frage zu den Angeboten"
+          enterKeyHint="send"
+          placeholder="Z. B. „Wo ist Kaffee diese Woche am günstigsten?“"
           className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-28 text-sm placeholder:text-fg-subtle focus:border-accent focus:outline-none"
         />
         <button

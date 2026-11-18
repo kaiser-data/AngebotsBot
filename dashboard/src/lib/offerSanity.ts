@@ -11,6 +11,8 @@
  *    dashboard queries by default.
  */
 
+import { berlinDate } from "./week";
+
 // Pack/multi-unit indicators that strongly suggest a multi-pack listing where
 // the headline discount % can't be trusted at face value.
 const PACK_PATTERNS: RegExp[] = [
@@ -40,6 +42,8 @@ export function discountTrust(
   discountPercent: number | null | undefined,
 ): DiscountTrust {
   if (discountPercent == null) return "trusted";
+  // Negative / NaN = price above the "regular" price — a parsing error.
+  if (!Number.isFinite(discountPercent) || discountPercent < 0) return "implausible";
   if (discountPercent > 95) return "implausible";
   if (discountPercent > 85) return "suspect";
   if (discountPercent > 70) {
@@ -52,17 +56,20 @@ export function discountTrust(
 /**
  * Is this offer's validity window in the past? (links go stale shortly after.)
  * NULL valid_to = treat as fresh — kaufDA omits dates for evergreen listings.
+ *
+ * "Today" is the Berlin calendar day: between midnight and 01:00/02:00 Berlin
+ * the UTC date is still yesterday, so a UTC comparison kept showing offers
+ * that had already ended.
  */
 export function isExpired(validTo: string | null | undefined, today: Date = new Date()): boolean {
   if (!validTo) return false;
   // valid_to is a date column (YYYY-MM-DD). Compare lexicographically.
-  const todayIso = today.toISOString().slice(0, 10);
-  return validTo < todayIso;
+  return validTo.slice(0, 10) < todayIso(today);
 }
 
-/** ISO date used by Supabase date-column filters. */
+/** Today's Berlin calendar date (YYYY-MM-DD), for Supabase date-column filters. */
 export function todayIso(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
+  return berlinDate(now);
 }
 
 /** Anything not re-scraped in the last N days has almost certainly rotted on kaufDA. */
@@ -70,9 +77,7 @@ export const FRESHNESS_DAYS = 8;
 
 /** ISO timestamp for `FRESHNESS_DAYS` days ago. Used to filter `last_seen_at`. */
 export function freshnessThresholdIso(now: Date = new Date()): string {
-  const t = new Date(now);
-  t.setDate(t.getDate() - FRESHNESS_DAYS);
-  return t.toISOString();
+  return new Date(now.getTime() - FRESHNESS_DAYS * 86_400_000).toISOString();
 }
 
 /** Kaufda search-URL fallback for offers whose direct brochure URL is missing or dead. */

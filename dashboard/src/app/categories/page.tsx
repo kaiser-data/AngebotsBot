@@ -15,8 +15,8 @@ import {
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Card, EmptyState, OfferRow, PageHeader } from "@/components/ui";
-import { classify } from "@/lib/categoryHeuristic";
 import { bucketFromKaufda } from "@/lib/kaufdaTaxonomy";
+import { resolveCategory, type LLMCategory } from "@/lib/resolveCategory";
 import {
   applyWeekFilter,
   excludeExpired,
@@ -46,8 +46,6 @@ const ICONS: Record<Bucket, ReactNode> = {
 };
 
 type Source = "kaufda" | "heuristic";
-
-type LLMCategory = { category: string; subcategory: string | null };
 
 type AggRow = {
   id: string;
@@ -83,20 +81,6 @@ async function offerFields(extra = ""): Promise<string> {
 }
 
 /**
- * Bucket for one offer, best source first:
- *   1. kaufDA's own taxonomy (~95% coverage, most reliable)
- *   2. the LLM classification, where one exists
- *   3. the title heuristic
- */
-function bucketFor(row: AggRow, llm: Map<string, LLMCategory>): Bucket {
-  const fromKaufda = bucketFromKaufda(row.kaufda_category, row.kaufda_category_path);
-  if (fromKaufda) return fromKaufda;
-  const fromLLM = llm.get(row.id)?.category;
-  if (fromLLM && (BUCKETS as readonly string[]).includes(fromLLM)) return fromLLM as Bucket;
-  return classify(row.title, row.category).bucket;
-}
-
-/**
  * Fetch active offers for the week, plus LLM classifications.
  *
  * When `detail` is true, include store/price/image fields so drill-down can
@@ -114,12 +98,14 @@ async function fetchOffers(
       if (detail) {
         q = q.order("discount_percent", { ascending: false, nullsFirst: false });
       }
-      return q.range(from, to).returns<OfferRowData[]>();
+      // Unique tiebreaker: without it, pages can overlap or skip rows.
+      return q.order("id").range(from, to).returns<OfferRowData[]>();
     }),
     fetchAllRows<{ offer_id: string | null } & LLMCategory>((from, to) =>
       supabase
         .from("offer_latest_category")
         .select("offer_id, category, subcategory")
+        .order("offer_id")
         .range(from, to),
     ),
   ]);
@@ -138,11 +124,10 @@ type Aggregates = {
   subCounts: Map<Bucket, Map<string, number>>;
 };
 
-/** Subcategory for an offer — the LLM's when valid for the bucket, else the heuristic's. */
+/** Subcategory for an offer — always one that belongs to `bucket`. */
 function subcategoryFor(row: AggRow, bucket: Bucket, llm: Map<string, LLMCategory>): string {
-  const fromLLM = (llm.get(row.id)?.subcategory ?? "").trim();
-  if (fromLLM && (SUBCATEGORIES[bucket] as readonly string[]).includes(fromLLM)) return fromLLM;
-  return classify(row.title, row.category).subcategory;
+  const r = resolveCategory(row, llm.get(row.id));
+  return r.bucket === bucket ? r.subcategory : "Sonstige";
 }
 
 function aggregate(rows: AggRow[], llmByOffer: Map<string, LLMCategory>): Aggregates {
@@ -155,10 +140,9 @@ function aggregate(rows: AggRow[], llmByOffer: Map<string, LLMCategory>): Aggreg
 
   for (const r of rows) {
     if (!r.title && !r.category && !r.kaufda_category) continue;
-    const bucket = bucketFor(r, llmByOffer);
+    const { bucket, subcategory: sub } = resolveCategory(r, llmByOffer.get(r.id));
     bucketCounts.set(bucket, (bucketCounts.get(bucket) ?? 0) + 1);
     const m = subCounts.get(bucket)!;
-    const sub = subcategoryFor(r, bucket, llmByOffer);
     m.set(sub, (m.get(sub) ?? 0) + 1);
   }
 
@@ -183,9 +167,8 @@ function offersInBucket(
 ): OfferRowData[] {
   return rows
     .filter((o) => {
-      if (bucketFor(o, llm) !== cat) return false;
-      if (sub && subcategoryFor(o, cat, llm) !== sub) return false;
-      return true;
+      const r = resolveCategory(o, llm.get(o.id));
+      return r.bucket === cat && (!sub || r.subcategory === sub);
     })
     .slice(0, MAX_OFFERS_SHOWN);
 }
@@ -358,7 +341,7 @@ export default async function CategoriesPage({ searchParams }: { searchParams: S
                         key={o.id}
                         title={o.title ?? "(ohne Titel)"}
                         store={o.store ?? null}
-                        url={o.url ?? "#"}
+                        url={o.url ?? undefined}
                         imageUrl={o.image_url ?? null}
                         price={o.price ?? null}
                         originalPrice={o.original_price ?? null}
