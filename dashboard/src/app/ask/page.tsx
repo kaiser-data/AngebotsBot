@@ -9,7 +9,7 @@ import { askOffers, type AskResult } from "./actions";
 const SAMPLES = [
   "Vergleiche aktuelle Wasserangebote",
   "Wo ist Ariel diese Woche am günstigsten?",
-  "Gib mir die besten Rabatte auf Joghurt",
+  "Wo gibt es diese Woche Kaffee im Angebot?",
   "Welche Marken sind im Sortiment für Hundefutter?",
 ];
 

@@ -74,3 +74,10 @@ describe("relativeTime", () => {
     expect(relativeTime("2026-11-18T12:05:00Z", now)).toBe("gerade eben");
   });
 });
+
+describe("offers with only an old price", () => {
+  it("rank by the discount the badge shows", () => {
+    const r = classifyFeedRow(row("Senseo Kaffeepads", null, { price: 1.99, original_price: 3.99 }));
+    expect(r.eff).toBe(50);
+  });
+});

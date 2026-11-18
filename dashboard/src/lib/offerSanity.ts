@@ -54,6 +54,25 @@ export function discountTrust(
 }
 
 /**
+ * The discount to show, as a whole percent. kaufDA often gives an old price
+ * but no percentage (Senseo pads: 1,99 € instead of 3,99 €, no badge), and the
+ * AI answer must quote the same number as the badge next to it ("42 %" next to
+ * "−43%" looked like an error). One rounding rule for both.
+ */
+export function effectiveDiscount(
+  price: number | string | null | undefined,
+  original: number | string | null | undefined,
+  discountPercent: number | string | null | undefined,
+): number | null {
+  const d = discountPercent == null ? NaN : Number(discountPercent);
+  if (Number.isFinite(d)) return Math.round(d);
+  const p = price == null ? NaN : Number(price);
+  const o = original == null ? NaN : Number(original);
+  if (!Number.isFinite(p) || !Number.isFinite(o) || o <= 0 || p >= o || p < 0) return null;
+  return Math.round((1 - p / o) * 100);
+}
+
+/**
  * Is this offer's validity window in the past? (links go stale shortly after.)
  * NULL valid_to = treat as fresh — kaufDA omits dates for evergreen listings.
  *

@@ -3,7 +3,7 @@
  * component so it can be unit-tested.
  */
 
-import { discountTrust } from "./offerSanity";
+import { discountTrust, effectiveDiscount } from "./offerSanity";
 import type { Prefs } from "./prefs";
 import { resolveCategory, type CategoryInput } from "./resolveCategory";
 import type { Bucket } from "./taxonomy";
@@ -36,12 +36,14 @@ const PRICE_LOW_BOOST = 15;
 
 export function classifyFeedRow(o: FeedRow): ClassifiedRow {
   const { bucket, subcategory } = resolveCategory(o);
-  const trust = discountTrust(o.title, o.discount_percent);
+  // Same number the badge shows (computed from the old price when kaufDA gives no %).
+  const discount = effectiveDiscount(o.price, o.original_price, o.discount_percent);
+  const trust = discountTrust(o.title, discount);
   return {
     ...o,
     bucket,
     subcategory,
-    eff: trust === "implausible" ? null : o.discount_percent,
+    eff: trust === "implausible" ? null : discount,
     trusted: trust === "trusted",
   };
 }

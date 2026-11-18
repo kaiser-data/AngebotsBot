@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   discountTrust,
+  effectiveDiscount,
   FRESHNESS_DAYS,
   freshnessThresholdIso,
   isExpired,
@@ -76,5 +77,22 @@ describe("offerLink", () => {
       "https://www.kaufda.de/Angebote/K%C3%A4se%20%26%20Wein",
     );
     expect(offerLink(null, null)).toBe("https://www.kaufda.de");
+  });
+});
+
+describe("effectiveDiscount (badge and AI answer use the same number)", () => {
+  it("rounds the stored percent to a whole number", () => {
+    expect(effectiveDiscount(2.29, 3.99, 42.6)).toBe(43);
+    expect(effectiveDiscount(4.44, 6.99, "36.48")).toBe(36);
+  });
+  it("computes it from the old price when kaufDA gives none", () => {
+    expect(effectiveDiscount(1.99, 3.99, null)).toBe(50);
+    expect(effectiveDiscount("0.99", "2.69", null)).toBe(63);
+  });
+  it("shows nothing when there is no real saving", () => {
+    expect(effectiveDiscount(2.99, 2.99, null)).toBeNull();
+    expect(effectiveDiscount(3.49, 2.99, null)).toBeNull();
+    expect(effectiveDiscount(null, 2.99, null)).toBeNull();
+    expect(effectiveDiscount(1.99, 0, null)).toBeNull();
   });
 });

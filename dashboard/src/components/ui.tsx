@@ -86,13 +86,13 @@ export function Badge({
 }
 
 import { AlertTriangle } from "lucide-react";
-import { discountTrust, offerLink } from "@/lib/offerSanity";
+import { discountTrust, effectiveDiscount, offerLink } from "@/lib/offerSanity";
 import { formatEuro } from "@/lib/search";
 
 export function PriceTag({
   price,
   original,
-  discount,
+  discount: rawDiscount,
   title,
   size = "md",
 }: {
@@ -104,6 +104,7 @@ export function PriceTag({
   size?: "sm" | "md";
 }) {
   const main = size === "sm" ? "text-sm font-semibold" : "text-base font-semibold";
+  const discount = effectiveDiscount(price, original, rawDiscount);
   const trust = discountTrust(title, discount);
 
   return (

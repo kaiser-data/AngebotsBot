@@ -1,6 +1,7 @@
 "use server";
 
 import { isConfigured, llm, MODEL } from "@/lib/llm";
+import { effectiveDiscount } from "@/lib/offerSanity";
 import { supabase } from "@/lib/supabase";
 
 export type AskedOffer = {
@@ -135,7 +136,8 @@ async function answerWithCitations(
     store: o.store,
     price: o.price,
     original_price: o.original_price,
-    discount_percent: o.discount_percent,
+    // Same whole-percent value the badge shows, so the answer and the card agree.
+    discount_percent: effectiveDiscount(o.price, o.original_price, o.discount_percent),
     category: o.category,
   }));
 
