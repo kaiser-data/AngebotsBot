@@ -21,6 +21,10 @@ concurrency:
   group: scrape
   cancel-in-progress: false
 
+permissions:
+  contents: write   # push the data-archive branch
+  actions: write    # keep this schedule from being auto-disabled
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -66,3 +70,40 @@ jobs:
             ARGS="$ARGS --categorize"
           fi
           python -m scripts.run_scrape $ARGS
+
+      # ── Keep the database under the 500 MB free-plan limit ────────────────
+      # 1. export rows past retention to CSV.gz (nothing deleted yet)
+      # 2. push them to the `data-archive` branch
+      # 3. delete exactly the archived rows (skipped if 1 or 2 failed)
+      - name: Export rows past retention
+        run: python -m scripts.retention export --out archive_out
+
+      - name: Push archive to data-archive branch
+        run: |
+          set -euo pipefail
+          if [ ! -d archive_out/data ]; then echo "Nothing to archive."; exit 0; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898294+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin data-archive; then
+            git worktree add -B data-archive ../arch FETCH_HEAD
+          else
+            git worktree add --detach ../arch
+            git -C ../arch checkout --orphan data-archive
+            git -C ../arch rm -rfq . || true
+            printf '# AngebotsBot data archive\n\nRows removed from Supabase by scripts/retention.py, as gzipped CSV.\nOne folder per run: YYYY/MM-DD_HHMMSS/{price_history,offers}.csv.gz\n' > ../arch/README.md
+          fi
+          cp -R archive_out/data/. ../arch/
+          git -C ../arch add -A
+          git -C ../arch commit -qm "archive: $(date -u +%FT%TZ)"
+          git -C ../arch push origin HEAD:data-archive
+
+      - name: Prune archived rows + log table sizes
+        run: python -m scripts.retention prune --manifest archive_out/manifest.json
+
+      # GitHub disables scheduled workflows after 60 days without commits —
+      # that is what stopped the scraper and let Supabase pause the project.
+      - name: Keep schedule alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/scrape.yml/enable" || true
