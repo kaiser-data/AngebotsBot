@@ -13,14 +13,14 @@ Deleting only after the archive is pushed means a failed push never loses rows:
 the prune step doesn't run, and the next day exports the same rows again.
 
 What is retained in the database:
-  price_history  last HISTORY_DAYS days (deal score uses 90)
-  offers         seen in the last OFFER_DAYS days (older ones are inactive,
-                 their links are dead; deleting cascades only history rows that
-                 are older still, which were archived first — see below)
+  offers         seen in the last OFFER_DAYS days. kaufDA issues new offer ids
+                 every week, so old rows pile up fast (193k rows / 587 MB in
+                 Nov 2026 while only ~3k were current). The dashboard only
+                 shows offers seen in the last 8 days.
+  price_history  last HISTORY_DAYS days for offers that are kept (deal score
+                 uses 90). A deleted offer's history is archived WITH it —
+                 deleting an offer cascades to its history.
   embeddings     cleared for offers unseen for EMBEDDING_DAYS (existing RPC)
-
-OFFER_DAYS >= HISTORY_DAYS on purpose: an offer unseen for OFFER_DAYS has no
-history newer than that, so all of it was already exported by the history pass.
 
 Usage:
   python -m scripts.retention export --out archive_out
@@ -42,15 +42,17 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("retention")
 
-HISTORY_DAYS = 120
-OFFER_DAYS = 120
-EMBEDDING_DAYS = 21
+HISTORY_DAYS = 100
+OFFER_DAYS = 30
+EMBEDDING_DAYS = 14
 
 PAGE = 1000
-# Bound each run so a large first backlog is worked off over several days
+# Bound each run so a large first backlog is worked off over several runs
 # instead of one run that hits the Actions timeout.
-MAX_ROWS_PER_RUN = 150_000
-DELETE_CHUNK = 200
+MAX_OFFERS_PER_RUN = 40_000
+MAX_HISTORY_PER_RUN = 150_000
+ID_CHUNK = 200          # uuids per request (URL length)
+HISTORY_ID_CHUNK = 500  # bigint ids per request
 
 HISTORY_COLUMNS = [
     "id", "offer_id", "external_id", "price", "loyalty_price", "original_price",
@@ -65,7 +67,6 @@ OFFER_COLUMNS = [
 
 
 def cutoffs(now: datetime) -> dict[str, str]:
-    assert OFFER_DAYS >= HISTORY_DAYS, "offers must outlive their history (cascade)"
     return {
         "history_before": (now - timedelta(days=HISTORY_DAYS)).isoformat(),
         "offers_before": (now - timedelta(days=OFFER_DAYS)).isoformat(),
@@ -103,10 +104,10 @@ def _existing_columns(sb, table: str, wanted: list[str]) -> list[str]:
     return cols
 
 
-def _fetch_older(sb, table: str, columns: list[str], ts_col: str, before: str) -> list[dict]:
-    """Rows with ts_col < before, ordered by id, capped at MAX_ROWS_PER_RUN."""
+def _fetch_older(sb, table: str, columns: list[str], ts_col: str, before: str, cap: int) -> list[dict]:
+    """Rows with ts_col < before, ordered by id, at most `cap`."""
     rows: list[dict] = []
-    while len(rows) < MAX_ROWS_PER_RUN:
+    while len(rows) < cap:
         q = (
             sb.table(table)
             .select(",".join(columns))
@@ -121,7 +122,30 @@ def _fetch_older(sb, table: str, columns: list[str], ts_col: str, before: str) -
         rows.extend(page)
         if len(page) < PAGE:
             break
-    return rows[:MAX_ROWS_PER_RUN]
+    return rows[:cap]
+
+
+def _history_of(sb, offer_ids: list[str]) -> list[dict]:
+    """ALL price_history rows of these offers (any age)."""
+    rows: list[dict] = []
+    for ids in chunks(offer_ids, ID_CHUNK):
+        last = None
+        while True:
+            q = (
+                sb.table("price_history")
+                .select(",".join(HISTORY_COLUMNS))
+                .in_("offer_id", ids)
+                .order("id")
+                .limit(PAGE)
+            )
+            if last is not None:
+                q = q.gt("id", last)
+            page = q.execute().data or []
+            rows.extend(page)
+            if len(page) < PAGE:
+                break
+            last = page[-1]["id"]
+    return rows
 
 
 def export(sb, out: Path, now: datetime) -> dict:
@@ -132,29 +156,34 @@ def export(sb, out: Path, now: datetime) -> dict:
     manifest: dict = {"created_at": now.isoformat(), **c, "files": [],
                       "history_ids": [], "offer_ids": []}
 
-    history = _fetch_older(sb, "price_history", HISTORY_COLUMNS, "observed_at", c["history_before"])
+    # 1. Long-unseen offers + every history row they own (the delete cascades).
+    cols = _existing_columns(sb, "offers", OFFER_COLUMNS)
+    offers = _fetch_older(sb, "offers", cols, "last_seen_at", c["offers_before"], MAX_OFFERS_PER_RUN)
+    history = _history_of(sb, [o["id"] for o in offers])
+
+    # 2. Old history of offers that stay.
+    budget = MAX_HISTORY_PER_RUN - len(history)
+    if budget > 0:
+        have = {r["id"] for r in history}
+        older = _fetch_older(sb, "price_history", HISTORY_COLUMNS, "observed_at",
+                             c["history_before"], budget)
+        history += [r for r in older if r["id"] not in have]
+
+    if offers:
+        f = out / "data" / stamp / "offers.csv.gz"
+        write_csv_gz(f, cols, offers)
+        manifest["files"].append(str(f.relative_to(out)))
+        manifest["offer_ids"] = [o["id"] for o in offers]
     if history:
         f = out / "data" / stamp / "price_history.csv.gz"
         write_csv_gz(f, HISTORY_COLUMNS, history)
         manifest["files"].append(str(f.relative_to(out)))
         manifest["history_ids"] = [r["id"] for r in history]
 
-    # Offers are only exported once their whole history is gone from the DB
-    # (i.e. the history backlog is fully worked off) — otherwise the cascade
-    # would delete history rows we haven't archived yet.
-    if len(history) < MAX_ROWS_PER_RUN:
-        cols = _existing_columns(sb, "offers", OFFER_COLUMNS)
-        offers = _fetch_older(sb, "offers", cols, "last_seen_at", c["offers_before"])
-        if offers:
-            f = out / "data" / stamp / "offers.csv.gz"
-            write_csv_gz(f, cols, offers)
-            manifest["files"].append(str(f.relative_to(out)))
-            manifest["offer_ids"] = [r["id"] for r in offers]
-
     out.mkdir(parents=True, exist_ok=True)
     (out / "manifest.json").write_text(json.dumps(manifest))
-    logger.info("exported %d price_history rows, %d offers",
-                len(manifest["history_ids"]), len(manifest["offer_ids"]))
+    logger.info("exported %d offers, %d price_history rows",
+                len(manifest["offer_ids"]), len(manifest["history_ids"]))
     return manifest
 
 
@@ -173,11 +202,11 @@ def verify_archive(out: Path, manifest: dict) -> None:
 def prune(sb, out: Path, manifest: dict) -> dict:
     verify_archive(out, manifest)
     deleted = {"price_history": 0, "offers": 0}
-    for ids in chunks(manifest["history_ids"], DELETE_CHUNK):
-        sb.table("price_history").delete().in_("id", ids) \
-            .lt("observed_at", manifest["history_before"]).execute()
+    # History first, by id: these rows are in the archive whatever their age.
+    for ids in chunks(manifest["history_ids"], HISTORY_ID_CHUNK):
+        sb.table("price_history").delete().in_("id", ids).execute()
         deleted["price_history"] += len(ids)
-    for ids in chunks(manifest["offer_ids"], DELETE_CHUNK):
+    for ids in chunks(manifest["offer_ids"], ID_CHUNK):
         # Re-check the age: an offer that came back since the export stays.
         sb.table("offers").delete().in_("id", ids) \
             .lt("last_seen_at", manifest["offers_before"]).execute()

@@ -53,17 +53,11 @@ def test_offer_without_any_price_is_skipped():
 
 # ── retention: archive first, delete only what was archived ──────────────────
 
-def test_offers_outlive_their_history():
-    # Deleting an offer cascades to price_history. If offers were deleted
-    # earlier than history, un-archived history rows would be lost.
-    assert retention.OFFER_DAYS >= retention.HISTORY_DAYS
-    c = retention.cutoffs(NOW)
-    assert c["offers_before"] <= c["history_before"]
-
-
 def test_cutoffs_are_the_configured_ages():
     c = retention.cutoffs(NOW)
     assert datetime.fromisoformat(c["history_before"]) == NOW - timedelta(days=retention.HISTORY_DAYS)
+    assert datetime.fromisoformat(c["offers_before"]) == NOW - timedelta(days=retention.OFFER_DAYS)
+    assert retention.HISTORY_DAYS >= 90   # deal score window
 
 
 def test_csv_round_trip_keeps_umlauts_and_nulls(tmp_path):
@@ -123,31 +117,50 @@ class FakeSB:
         return type("Q", (), {"execute": lambda self: type("R", (), {"data": []})()})()
 
 
+def _ago(days):
+    return (NOW - timedelta(days=days)).isoformat()
+
+
 def _db():
-    old = (NOW - timedelta(days=200)).isoformat()
-    new = (NOW - timedelta(days=5)).isoformat()
     return {
-        "price_history": [
-            {"id": i, "offer_id": "o1", "external_id": "e1", "price": 1.0, "observed_at": old}
-            for i in range(1, 2501)
-        ] + [{"id": 9999, "offer_id": "o2", "external_id": "e2", "price": 2.0, "observed_at": new}],
         "offers": [
-            {"id": "o1", "external_id": "e1", "title": "Alt", "last_seen_at": old},
-            {"id": "o2", "external_id": "e2", "title": "Neu", "last_seen_at": new},
+            {"id": "gone", "external_id": "e1", "title": "Alt", "last_seen_at": _ago(45)},
+            {"id": "kept", "external_id": "e2", "title": "Neu", "last_seen_at": _ago(1)},
         ],
+        "price_history": (
+            # deleted offer: history newer than HISTORY_DAYS must be archived too
+            [{"id": i, "offer_id": "gone", "external_id": "e1", "price": 1.0, "observed_at": _ago(50)}
+             for i in range(1, 1201)]
+            # kept offer: one row past HISTORY_DAYS, one recent
+            + [{"id": 5000, "offer_id": "kept", "external_id": "e2", "price": 2.0, "observed_at": _ago(150)},
+               {"id": 5001, "offer_id": "kept", "external_id": "e2", "price": 2.0, "observed_at": _ago(3)}]
+        ),
     }
 
 
-def test_export_then_prune_removes_only_old_rows(tmp_path):
+def test_export_then_prune_removes_only_archived_rows(tmp_path):
     db = _db()
     sb = FakeSB(db)
     manifest = retention.export(sb, tmp_path, NOW)
-    assert len(manifest["history_ids"]) == 2500        # paged past 1000
-    assert manifest["offer_ids"] == ["o1"]
+    assert manifest["offer_ids"] == ["gone"]
+    assert len(manifest["history_ids"]) == 1201        # 1200 of "gone" (paged) + old row of "kept"
 
     retention.prune(sb, tmp_path, json.loads((tmp_path / "manifest.json").read_text()))
-    assert [r["id"] for r in db["price_history"]] == [9999]
-    assert [r["id"] for r in db["offers"]] == ["o2"]
+    assert [r["id"] for r in db["offers"]] == ["kept"]
+    assert [r["id"] for r in db["price_history"]] == [5001]
+
+
+def test_every_deleted_row_is_in_the_archive(tmp_path):
+    db = _db()
+    before = {r["id"] for r in db["price_history"]}
+    manifest = retention.export(FakeSB(db), tmp_path, NOW)
+    retention.prune(FakeSB(db), tmp_path, manifest)
+    deleted = before - {r["id"] for r in db["price_history"]}
+    archived = {
+        int(r["id"]) for rel in manifest["files"] if "price_history" in rel
+        for r in retention.read_csv_gz(tmp_path / rel)
+    }
+    assert deleted <= archived
 
 
 def test_prune_refuses_when_archive_is_incomplete(tmp_path):
@@ -157,14 +170,22 @@ def test_prune_refuses_when_archive_is_incomplete(tmp_path):
     manifest["history_ids"].append(123456)              # not in any file
     with pytest.raises(RuntimeError, match="not in archive"):
         retention.prune(sb, tmp_path, manifest)
-    assert len(db["price_history"]) == 2501             # nothing deleted
+    assert len(db["price_history"]) == 1202             # nothing deleted
 
 
-def test_offers_wait_while_history_backlog_remains(tmp_path, monkeypatch):
-    monkeypatch.setattr(retention, "MAX_ROWS_PER_RUN", 1000)
+def test_offer_seen_again_after_export_is_kept(tmp_path):
+    db = _db()
+    manifest = retention.export(FakeSB(db), tmp_path, NOW)
+    db["offers"][0]["last_seen_at"] = NOW.isoformat()   # scraper saw it again
+    retention.prune(FakeSB(db), tmp_path, manifest)
+    assert {o["id"] for o in db["offers"]} == {"gone", "kept"}
+
+
+def test_run_caps_bound_the_work(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, "MAX_HISTORY_PER_RUN", 500)
     manifest = retention.export(FakeSB(_db()), tmp_path, NOW)
-    assert len(manifest["history_ids"]) == 1000
-    assert manifest["offer_ids"] == []                  # next run, after history is gone
+    # The deleted offer's history is never capped — it would be lost otherwise.
+    assert len(manifest["history_ids"]) == 1200
 
 
 def test_nothing_to_do_writes_empty_manifest(tmp_path):
