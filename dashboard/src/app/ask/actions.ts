@@ -40,6 +40,7 @@ const ANSWER_SYSTEM = `Du bist ein hilfreicher Berater für deutsche Supermarkt-
 
 Du bekommst eine Frage und eine Liste passender Angebote (id, title, store, price, original_price, discount_percent, category).
 Beantworte die Frage präzise auf Deutsch, in maximal 6 Sätzen oder einer kurzen Liste.
+Sprich den Nutzer mit "du" an. Schreibe Preise im deutschen Format mit Leerzeichen vor dem Euro-Zeichen ("13,99 €") und Rabatte als ganze Prozent ("28 %").
 
 Wenn der Nutzer Angebote vergleichen will:
 - Nenne konkrete Preise mit Markt-Name.

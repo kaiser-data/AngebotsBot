@@ -2,7 +2,8 @@
 
 import { Loader2, Sparkles, MessageCircleQuestion } from "lucide-react";
 import { useState, useTransition } from "react";
-import { Badge, Card, EmptyState, OfferRow, PageHeader } from "@/components/ui";
+import { Card, EmptyState, OfferRow, PageHeader } from "@/components/ui";
+import { parseAnswer, type Part } from "@/lib/answerFormat";
 import { askOffers, type AskResult } from "./actions";
 
 const SAMPLES = [
@@ -106,38 +107,58 @@ export default function AskPage() {
   );
 }
 
+function Answer({ text }: { text: string }) {
+  const blocks = parseAnswer(text);
+  const inline = (parts: Part[]) =>
+    parts.map((p, i) =>
+      p.kind === "bold" ? (
+        <strong key={i} className="font-semibold">{p.text}</strong>
+      ) : p.kind === "offer" ? (
+        <a key={i} href={`#offer-${p.id}`} className="font-medium text-accent hover:underline">
+          {p.text}
+        </a>
+      ) : (
+        <span key={i}>{p.text}</span>
+      ),
+    );
+  return (
+    <>
+      {blocks.map((b, i) =>
+        b.bullet ? (
+          <div key={i} className="flex gap-2 pl-1">
+            <span aria-hidden className="text-fg-subtle">•</span>
+            <p>{inline(b.parts)}</p>
+          </div>
+        ) : (
+          <p key={i}>{inline(b.parts)}</p>
+        ),
+      )}
+    </>
+  );
+}
+
 function ResultView({ result }: { result: Extract<AskResult, { ok: true }> }) {
   return (
     <div className="space-y-6">
       <Card className="p-5">
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-          <span>Modus:</span>
-          {result.keywords.length === 0 ? (
-            <Badge tone="neutral">—</Badge>
-          ) : (
-            result.keywords.map((k) => (
-              <Badge key={k} tone="accent">
-                {k}
-              </Badge>
-            ))
-          )}
-          <span className="ml-auto">{result.candidateCount} Treffer geprüft</span>
+        <div className="mb-3 text-xs text-fg-muted">
+          {result.candidateCount} passende Angebote verglichen
         </div>
-        <div className="prose-sm whitespace-pre-wrap text-sm leading-relaxed text-fg">
-          {result.answer}
+        <div className="space-y-2 text-sm leading-relaxed text-fg">
+          <Answer text={result.answer} />
         </div>
       </Card>
 
       {result.citedOffers.length > 0 && (
         <section>
           <h2 className="mb-3 text-sm font-medium text-fg-muted">
-            Referenzierte Angebote ({result.citedOffers.length})
+            Angebote aus der Antwort ({result.citedOffers.length})
           </h2>
           <Card className="overflow-hidden">
             <ul className="divide-y divide-border">
               {result.citedOffers.map((o) => (
+                <li key={o.id} id={`offer-${o.id}`} className="scroll-mt-24">
                 <OfferRow
-                  key={o.id}
                   title={o.title}
                   store={o.store}
                   url={o.url}
@@ -147,6 +168,7 @@ function ResultView({ result }: { result: Extract<AskResult, { ok: true }> }) {
                   discountPercent={o.discount_percent}
                   meta={o.category ?? undefined}
                 />
+                </li>
               ))}
             </ul>
           </Card>
