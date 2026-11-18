@@ -4,8 +4,9 @@
  * Used by both the "Für dich" feed and the categories page, so a user who picks
  * "Getränke" in their preferences sees exactly what the Getränke category shows.
  *
- * Source priority:
- *   1. kaufDA's own taxonomy (~95% coverage, most reliable)
+ * Source priority (bucket and subcategory alike):
+ *   1. kaufDA's own taxonomy (~95% coverage, most reliable; its path names the
+ *      product type, e.g. "… > Getränke > Alkoholische Getränke > Bier")
  *   2. the LLM classification, where one exists
  *   3. the title heuristic
  *
@@ -15,7 +16,7 @@
  */
 
 import { classify, type Classification } from "./categoryHeuristic";
-import { bucketFromKaufda } from "./kaufdaTaxonomy";
+import { classifyFromKaufda } from "./kaufdaTaxonomy";
 import taxonomyJson from "./taxonomy.json";
 import { BUCKETS, SUBCATEGORIES, type Bucket } from "./taxonomy";
 
@@ -49,9 +50,9 @@ export function resolveCategory(row: CategoryInput, llm?: LLMCategory | null): R
 
   let bucket: Bucket;
   let source: CategorySource;
-  const fromKaufda = bucketFromKaufda(row.kaufda_category, row.kaufda_category_path);
-  if (fromKaufda) {
-    bucket = fromKaufda;
+  const kaufda = classifyFromKaufda(row.kaufda_category, row.kaufda_category_path);
+  if (kaufda) {
+    bucket = kaufda.bucket;
     source = "kaufda";
   } else if (llmBucket) {
     bucket = llmBucket;
@@ -61,7 +62,9 @@ export function resolveCategory(row: CategoryInput, llm?: LLMCategory | null): R
     source = "heuristic";
   }
 
+  // kaufDA's product type beats a guess; a fallback label beats a wrong one.
   const subcategory =
+    (kaufda?.bucket === bucket ? validSub(bucket, kaufda.subcategory) : null) ??
     (llmBucket === bucket ? validSub(bucket, llm?.subcategory) : null) ??
     (heuristic.bucket === bucket ? validSub(bucket, heuristic.subcategory) : null) ??
     FALLBACK_SUB[bucket] ??
